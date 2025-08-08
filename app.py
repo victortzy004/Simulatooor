@@ -9,6 +9,7 @@ import plotly.graph_objects as go
 # ===========================================================
 # Constants
 BASE_EPSILON = 1e-4
+OUTCOMES = ['A', 'B', 'C']
 
 
 # ===========================================================
@@ -179,8 +180,6 @@ for i, token in enumerate(['A', 'B', 'C']):
                 else:
                     st.warning(f"Insufficient qty to sell.")
 
-# to include the amount is 'locked up' too
-# Get rid of overall market size
 
 # Display logs
 if st.session_state.logs:
@@ -204,7 +203,7 @@ if st.session_state.logs:
 
 
     token_cols = st.columns(3)
-    for i, token in enumerate(['A', 'B', 'C']):
+    for i, token in enumerate(OUTCOMES):
         with token_cols[i]:
             st.subheader(f'Outcome {token}')
             reserve = st.session_state[f'reserve_{token}']
@@ -219,7 +218,12 @@ if st.session_state.logs:
             with sub_cols[2]:
                 st.metric(f"MCAP {token}", mcap)
 
-    st.write(f"Odds A: {odds['A']} | Odds B: {odds['B']} | Odds C: {odds['C']}")
+    # Odds Display
+    sub_cols_2 = st.columns(len(OUTCOMES))
+    for i, token in enumerate(OUTCOMES):
+        with sub_cols_2[i]:
+            st.metric(f"Odds {token}", f"{odds[token]}x" if odds[token] != '-' else "-") 
+
 
     st.subheader("Transaction Log")
     st.dataframe(df, use_container_width=True)
