@@ -27,8 +27,8 @@ WHITELIST = {"admin", "rui", "haoye", "leo", "steve", "wenbo", "sam", "sharmaine
 
 # ===========================================================
 # Streamlit Setup
-st.set_page_config(page_title="42: Simulatoooor", layout="wide")
-st.title("42: Twin Bonding Curve Simulatoooor — Multi‑User")
+st.set_page_config(page_title="42: Simulatoooor (Global)", layout="wide")
+st.title("42: Twin Bonding Curve Simulatoooor — Global PVP")
 
 def st_display_market_status(active):
     if active:
