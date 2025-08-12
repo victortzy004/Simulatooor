@@ -23,13 +23,13 @@ STARTING_BALANCE = 5000.0
 MARKET_QUESTION = "Price of Ethereum by 17th Aug?"
 RESOLUTION_NOTE = (
     'This market will resolve according to the final "Close" price of the '
-    'Binance 1-minute candle for BTC/USDT at 12:00 UTC.'
+    'Binance 1-minute candle for ETH/USDT at 12:00 UTC.'
 )
 TOKENS = ["<4200", "4200-4500", ">4500"]
 # TOKENS = [f":blue[{TOKENS_TEXT[0]}]", f":blue[{TOKENS_TEXT[1]}]", f":blue[{TOKENS_TEXT[2]}]"]
 
 # Whitelisted usernames and admin reset control
-WHITELIST = {"admin", "rui", "haoye", "leo", "steve", "wenbo", "sam", "sharmaine", "mariam", "henry", "guard", "victor"}
+WHITELIST = {"admin", "rui", "haoye", "leo", "steve", "wenbo", "sam", "sharmaine", "mariam", "henry", "guard", "victor", "toby"}
 
 # ===========================================================
 # Streamlit Setup
