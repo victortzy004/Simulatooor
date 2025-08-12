@@ -20,7 +20,13 @@ BASE_EPSILON = 1e-4
 MARKET_DURATION_DAYS = 5
 DB_PATH = "app.db"
 STARTING_BALANCE = 5000.0
-TOKENS = ["A", "B", "C"]
+MARKET_QUESTION = "Price of Ethereum by 17th Aug?"
+RESOLUTION_NOTE = (
+    'This market will resolve according to the final "Close" price of the '
+    'Binance 1-minute candle for BTC/USDT at 12:00 UTC.'
+)
+TOKENS = ["<4200", "4200-4500", ">4500"]
+# TOKENS = [f":blue[{TOKENS_TEXT[0]}]", f":blue[{TOKENS_TEXT[1]}]", f":blue[{TOKENS_TEXT[2]}]"]
 
 # Whitelisted usernames and admin reset control
 WHITELIST = {"admin", "rui", "haoye", "leo", "steve", "wenbo", "sam", "sharmaine", "mariam", "henry", "guard", "victor"}
@@ -29,6 +35,8 @@ WHITELIST = {"admin", "rui", "haoye", "leo", "steve", "wenbo", "sam", "sharmaine
 # Streamlit Setup
 st.set_page_config(page_title="42: Simulatoooor (Global)", layout="wide")
 st.title("42: Twin Bonding Curve Simulatoooor — Global PVP")
+
+st.subheader(f":blue[{MARKET_QUESTION}]")
 
 def st_display_market_status(active):
     if active:
@@ -88,8 +96,6 @@ def qty_from_sell_usdc(reserve: int, usdc_amount: float) -> int:
 # ===========================================================
 # DB Helpers
 
-# def get_conn():
-#     return sqlite3.connect(DB_PATH, check_same_thread=False)
 
 def get_conn():
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
@@ -178,7 +184,20 @@ def init_db():
         for t in TOKENS:
             c.execute("INSERT OR IGNORE INTO reserves(token,shares,usdc) VALUES(?,?,?)", (t, 0, 0.0))
 
+def ensure_market_resolution_columns():
+    with closing(get_conn()) as conn, conn:
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(market)").fetchall()}
+        if "winner_token" not in cols:
+            conn.execute("ALTER TABLE market ADD COLUMN winner_token TEXT")
+        if "resolved" not in cols:
+            conn.execute("ALTER TABLE market ADD COLUMN resolved INTEGER DEFAULT 0")
+        if "resolved_ts" not in cols:
+            conn.execute("ALTER TABLE market ADD COLUMN resolved_ts TEXT")
+
 init_db()
+ensure_market_resolution_columns()
+
+
 
 # ===========================================================
 # Sidebar user auth with whitelist (persist to session, rerun)
@@ -215,7 +234,7 @@ with st.sidebar:
             st.session_state.username = username_input
             st.rerun()
 
-    if "user_id" in st.session_state and st.button("Logout"):
+    if "user_id" in st.session_state and st.button("Logout", type="primary"):
         for k in ("user_id", "username"):
             if k in st.session_state:
                 del st.session_state[k]
@@ -228,101 +247,125 @@ if "user_id" in st.session_state:
         if bal_row:
             st.session_state.balance = float(bal_row["balance"])
 
-# ===========================================================
-# # Sidebar user auth with whitelist
-# with st.sidebar:
-#     st.header("User")
-#     username = st.text_input("Enter username")
-#     if username and username not in WHITELIST:
-#         st.error("Username not whitelisted.")
-#     join_disabled = (bool(username) and username not in WHITELIST)
-#     join = st.button("Join / Load", disabled=join_disabled)
-
-
-# user = None
-# if join and username:
-#     with closing(get_conn()) as conn, conn:
-#         c = conn.cursor()
-#         # enforce max 10 users
-#         c.execute("SELECT COUNT(*) FROM users")
-#         cnt = c.fetchone()[0]
-#         c.execute("SELECT id, balance FROM users WHERE username=?", (username,))
-#         row = c.fetchone()
-#         if row is None:
-#             if cnt >= 10:
-#                 st.sidebar.error("Max 10 users reached. Try another time.")
-#             else:
-#                 c.execute("INSERT INTO users(username,balance,created_at) VALUES(?,?,?)",
-#                           (username, STARTING_BALANCE, datetime.utcnow().isoformat()))
-#                 user_id = c.lastrowid
-#                 for t in TOKENS:
-#                     c.execute("INSERT OR IGNORE INTO holdings(user_id,token,shares) VALUES(?,?,0)", (user_id, t))
-#                 user = (user_id, STARTING_BALANCE)
-#         else:
-#             user = (row[0], row[1])
-
-# # Load user (if previously joined this session)
-# if 'user_id' not in st.session_state and user:
-#     st.session_state.user_id, st.session_state.balance = user
-# elif 'user_id' in st.session_state:
-#     # refresh balance
-#     with closing(get_conn()) as conn:
-#         cur = conn.cursor()
-#         cur.execute("SELECT balance FROM users WHERE id=?", (st.session_state.user_id,))
-#         bal = cur.fetchone()
-#         if bal:
-#             st.session_state.balance = bal[0]
 
 # ===========================================================
 
 # Admin-only reset market button (use session username)
 if 'user_id' in st.session_state and st.session_state.get("username") == "admin":
+    st.sidebar.subheader("Admin Controls")
+    wipe_users = st.sidebar.checkbox("Reset all users (wipe accounts)", value=False)
     if st.sidebar.button("Reset Market"):
         with closing(get_conn()) as conn, conn:
             c = conn.cursor()
             start = datetime.utcnow()
             end = start + timedelta(days=MARKET_DURATION_DAYS)
-            c.execute("UPDATE market SET start_ts=?, end_ts=? WHERE id=1", (start.isoformat(), end.isoformat()))
+            # reset market window + clear resolution flags
+            c.execute("""
+                UPDATE market
+                SET start_ts=?,
+                    end_ts=?,
+                    winner_token=NULL,
+                    resolved=0,
+                    resolved_ts=NULL
+                WHERE id=1
+            """, (start.isoformat(), end.isoformat()))
+            # reset reserves
             for t in TOKENS:
                 c.execute("UPDATE reserves SET shares=0, usdc=0 WHERE token=?", (t,))
-            c.execute("UPDATE users SET balance=?", (STARTING_BALANCE,))
-            c.execute("UPDATE holdings SET shares=0")
-            c.execute("DELETE FROM transactions")
+
+            if wipe_users:
+                # full wipe of user state
+                c.execute("DELETE FROM holdings")
+                c.execute("DELETE FROM transactions")
+                c.execute("DELETE FROM users")
+                # also clear any admin session info so UI is consistent
+                for k in ("user_id", "username", "balance"):
+                    if k in st.session_state:
+                        del st.session_state[k]
+            else:
+                # keep users; reset balances/holdings and clear txs
+                c.execute("UPDATE users SET balance=?", (STARTING_BALANCE,))
+                c.execute("UPDATE holdings SET shares=0")
+                c.execute("DELETE FROM transactions")
+
         bump_version()  # notify all sessions
-        st.success("Market has been reset.")
+        st.success("Market has been reset." + (" All users wiped." if wipe_users else ""))
         st.rerun()
 
 
-# # Admin-only reset market button
-# if 'user_id' in st.session_state and username == "admin":
-#     if st.sidebar.button("Reset Market"):
-#         with closing(get_conn()) as conn, conn:
-#             c = conn.cursor()
-#             start = datetime.utcnow()
-#             end = start + timedelta(days=MARKET_DURATION_DAYS)
-#             c.execute("UPDATE market SET start_ts=?, end_ts=? WHERE id=1", (start.isoformat(), end.isoformat()))
-#             # reset reserves
-#             for t in TOKENS:
-#                 c.execute("UPDATE reserves SET shares=0, usdc=0 WHERE token=?", (t,))
-#             # reset users balances and holdings
-#             c.execute("UPDATE users SET balance=?", (STARTING_BALANCE,))
-#             c.execute("UPDATE holdings SET shares=0")
-#             # clear transactions
-#             c.execute("DELETE FROM transactions")
-#         st.success("Market has been reset.")
-#         st.rerun()
+# --- Admin: Resolve Parimutuel Market ---
+if 'user_id' in st.session_state and st.session_state.get("username") == "admin":
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("Resolve Market")
+    winner = st.sidebar.selectbox("Winning outcome", TOKENS, key="winner_select")
+    if st.sidebar.button("Resolve Now", disabled=not winner, type="secondary"):
+        # Do resolution
+        with closing(get_conn()) as conn, conn:
+            c = conn.cursor()
+
+            # guard: already resolved?
+            row = c.execute("SELECT resolved FROM market WHERE id=1").fetchone()
+            if row and int(row["resolved"] or 0) == 1:
+                st.sidebar.warning("Market already resolved.")
+            else:
+                # Total USDC pool
+                tot_pool = float(c.execute("SELECT SUM(usdc) AS s FROM reserves").fetchone()["s"] or 0.0)
+
+                # Total winning shares
+                win_shares = int(c.execute("SELECT shares FROM reserves WHERE token=?", (winner,)).fetchone()["shares"] or 0)
+
+                # Build payouts map (user_id -> payout)
+                payouts = {}
+                if win_shares > 0 and tot_pool > 0:
+                    for r in c.execute("SELECT user_id, shares FROM holdings WHERE token=? AND shares>0", (winner,)).fetchall():
+                        uid = int(r["user_id"])
+                        u_shares = int(r["shares"])
+                        payout = tot_pool * (u_shares / win_shares)
+                        payouts[uid] = payouts.get(uid, 0.0) + payout
+
+                # Pay users
+                for uid, amt in payouts.items():
+                    # add to balance
+                    bal = float(c.execute("SELECT balance FROM users WHERE id=?", (uid,)).fetchone()["balance"] or 0.0)
+                    new_bal = bal + float(amt)
+                    c.execute("UPDATE users SET balance=? WHERE id=?", (new_bal, uid))
+                    # log a resolve tx (per user)
+                    c.execute("""
+                        INSERT INTO transactions (ts,user_id,action,token,qty,buy_price,sell_price,buy_delta,sell_delta,balance_after)
+                        VALUES (?,?,?,?,?,?,?,?,?,?)
+                    """, (datetime.utcnow().isoformat(), uid, "Resolve", winner, 0, None, None, None, float(amt), new_bal))
+
+                # Zero out all holdings & reserves after settlement
+                c.execute("UPDATE holdings SET shares=0")
+                c.execute("UPDATE reserves SET shares=0, usdc=0")
+
+                # Mark market resolved & end now
+                c.execute("UPDATE market SET winner_token=?, resolved=1, resolved_ts=?, end_ts=? WHERE id=1",
+                          (winner, datetime.utcnow().isoformat(), datetime.utcnow().isoformat()))
+
+        bump_version()
+        st.success(f"Market resolved. Winner: {winner}. Payout pool: ${tot_pool:,.2f}")
+        st.rerun()
+
+# Winner banner (if resolved)
+with closing(get_conn()) as conn:
+    row = conn.execute("SELECT resolved, winner_token FROM market WHERE id=1").fetchone()
+    if row and int(row["resolved"] or 0) == 1:
+        st.success(f"✅ Resolved — Winner: {row['winner_token']}")
 
 
 
 # Market status
 with closing(get_conn()) as conn:
     cur = conn.cursor()
-    cur.execute("SELECT start_ts,end_ts FROM market WHERE id=1")
+    cur.execute("SELECT start_ts,end_ts,winner_token,resolved FROM market WHERE id=1")
     m = cur.fetchone()
-    market_start = datetime.fromisoformat(m[0])
-    market_end = datetime.fromisoformat(m[1])
+    market_start = datetime.fromisoformat(m["start_ts"])
+    market_end = datetime.fromisoformat(m["end_ts"])
+    resolved_flag = int(m["resolved"] or 0)
     now = datetime.utcnow()
-    active = market_start <= now <= market_end
+    active = (market_start <= now <= market_end) and (resolved_flag == 0)
+
 
     # Sidebar market status row
 with st.sidebar:
@@ -342,6 +385,69 @@ if 'user_id' not in st.session_state:
 # ===========================================================
 # Trading UI
 
+# Show market resolution / info section
+with closing(get_conn()) as conn:
+    market_row = conn.execute("""
+        SELECT resolved, winner_token, resolved_ts, end_ts
+        FROM market
+        WHERE id=1
+    """).fetchone()
+
+if market_row:
+    resolved_flag = int(market_row["resolved"] or 0)
+    winner_token = market_row["winner_token"]
+    resolved_ts = market_row["resolved_ts"]
+    end_ts = market_row["end_ts"]
+
+    if resolved_flag == 1 and winner_token:
+        # Market resolved - show outcome highlight
+        st.markdown(
+            f"""
+            <div style="
+                background-color: orange;
+                padding: 1rem;
+                border-radius: 0.5rem;
+                border: 1px solid #b2f2bb;
+                margin-bottom: 1rem;
+            ">
+                <h4 style="margin-top: 0;">✅ Market Resolved</h4>
+                <p>
+                    The winning outcome is <b style="color: green;">{winner_token}</b>.
+                    Settlement occurred on <b>{pd.to_datetime(resolved_ts).strftime('%Y-%m-%d %H:%M UTC')}</b>.
+                </p>
+                <p>All holdings in this outcome have been paid out proportionally from the total USDC pool.</p>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+    else:
+        # Market still active - show rules/reminder
+        st.markdown(
+            f"""
+            <div style="
+                background-color: grey;
+                padding: 1rem;
+                border-radius: 0.5rem;
+                border: 1px solid #a5b4fc;
+                margin-bottom: 1rem;
+            ">
+                <h4 style="margin-top: 0;">📜 Resolution Rules</h4>
+                <p>
+                    The market will resolve at <b>{pd.to_datetime(end_ts).strftime('%Y-%m-%d %H:%M UTC')}</b>.
+                    The winning outcome will receive the <b>entire USDC pool</b>,
+                    distributed <i>pro-rata</i> to holders based on their share count.
+                </p>
+                <p>
+                    <b>Resolution Note:</b> {RESOLUTION_NOTE}
+                </p>
+                <p>
+                    After resolution, all holdings will be cleared and balances updated automatically.
+                </p>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
 if 'user_id' in st.session_state:
     with closing(get_conn()) as conn:
         cur = conn.cursor()
@@ -358,8 +464,8 @@ if 'user_id' in st.session_state:
         global_reserves = {row[0]: int(row[1]) for row in reserve_rows} if reserve_rows else {}
 
     # Compute current buy price per token and holding values
-    prices = {t: float(buy_curve(global_reserves.get(t, 0))) for t in ['A', 'B', 'C']}
-    holding_values = {t: user_holdings.get(t, 0) * prices[t] for t in ['A', 'B', 'C']}
+    prices = {t: float(buy_curve(global_reserves.get(t, 0))) for t in TOKENS}
+    holding_values = {t: user_holdings.get(t, 0) * prices[t] for t in TOKENS}
     holdings_total_value = sum(holding_values.values())
     portfolio_value = bal + holdings_total_value
 
@@ -380,23 +486,24 @@ if 'user_id' in st.session_state:
         with ucols[0]:
             st.metric("Username", st.session_state.get("username",""))
         with ucols[1]:
-            st.metric("Balance (USDC)", f"{bal:,.2f}")
-        with ucols[2]:
             st.metric("Portfolio (USD)", f"{portfolio_value:,.2f}")
+        with ucols[2]:
+            st.metric("Balance (USDC)", f"{bal:,.2f}")
         with ucols[3]:
             st.metric("Shares Holdings Value (USD)", f"{holdings_total_value:,.2f}")
 
         # Per-token breakdown
         br_cols = st.columns(3)
-        for i, token in enumerate(['A', 'B', 'C']):
+        for i, token in enumerate(TOKENS):
             shares = user_holdings.get(token, 0)
             price = prices[token]
             val = holding_values[token]
             with br_cols[i]:
-                st.caption(f"Outcome {token}")
+                st.caption(f"Outcome :blue[{token}]")
                 st.text(f"Shares: {shares}")
                 st.text(f"Price: {price:.4f}")
                 st.text(f"Value: ${val:,.2f}")
+
 
 
 # Common Trading UI
@@ -420,7 +527,7 @@ with closing(get_conn()) as conn:
 
 for i, token in enumerate(TOKENS):
     with cols[i]:
-        st.markdown(f"### Outcome {token}")
+        st.markdown(f"### Outcome :blue[{token}]")
 
         reserve = int(reserves_map[token]["shares"])  # global shares for token
         price_now = round(buy_curve(reserve), 4)
@@ -536,7 +643,7 @@ with mc_cols[2]:
 tok_cols = st.columns(3)
 for i, token in enumerate(TOKENS):
     with tok_cols[i]:
-        st.subheader(f'Outcome {token}')
+        st.subheader(f'Outcome :blue[{token}]')
         row = res_df[res_df['Token']==token].iloc[0]
         reserve = int(row['Shares'])
         price = round(buy_curve(reserve), 3)
@@ -583,6 +690,7 @@ for col in float_cols:
 if not tx.empty:    
     st.subheader("Transaction Log")
     st.dataframe(tx_display, use_container_width=True)
+    st.divider()
 
     # Payout/Share Trend (recomputed from shares across tokens at each tx)
     st.subheader("📈 Payout/Share Trend")
@@ -603,27 +711,29 @@ if not tx.empty:
     ps_df = pd.DataFrame(shares_timeline)
     fig = px.line(ps_df, x="Time", y="Payout/Share", color="Outcome", markers=True, title="Payout/Share Over Time")
     st.plotly_chart(fig, use_container_width=True)
+    st.divider()
 
-    # Circulating Shares Over Time
-    st.subheader("📊 Circulating Token Shares Over Time")
-    rows = []
-    running = {t: 0 for t in TOKENS}
-    for _, r in tx.iterrows():
-        tkn, act, q = r['Outcome'], r['Action'], int(r['Quantity'])
-        if act == 'Buy':
-            running[tkn] += q
-        else:
-            running[tkn] -= q
-        rows.append({'Time': pd.to_datetime(r['Time']), **{f'Shares {t}': running[t] for t in TOKENS}})
-    shares_df = pd.DataFrame(rows)
-    m = shares_df.melt(id_vars='Time', var_name='Token', value_name='Reserve')
-    fig_stack = px.area(m, x="Time", y="Reserve", color="Token", title="Token Shares vs. Time")
-    st.plotly_chart(fig_stack, use_container_width=True)
+    # Hide for now
+    # # Circulating Shares Over Time
+    # st.subheader("📊 Circulating Token Shares Over Time")
+    # rows = []
+    # running = {t: 0 for t in TOKENS}
+    # for _, r in tx.iterrows():
+    #     tkn, act, q = r['Outcome'], r['Action'], int(r['Quantity'])
+    #     if act == 'Buy':
+    #         running[tkn] += q
+    #     else:
+    #         running[tkn] -= q
+    #     rows.append({'Time': pd.to_datetime(r['Time']), **{f'Shares {t}': running[t] for t in TOKENS}})
+    # shares_df = pd.DataFrame(rows)
+    # m = shares_df.melt(id_vars='Time', var_name='Token', value_name='Reserve')
+    # fig_stack = px.area(m, x="Time", y="Reserve", color="Token", title="Token Shares vs. Time")
+    # st.plotly_chart(fig_stack, use_container_width=True)
 
 # ===========================================================
 # Bonding Curves by Outcome with pointers
 st.subheader("🔁 Bonding Curves by Outcome")
-tab1, tab2, tab3 = st.tabs(["Outcome A", "Outcome B", "Outcome C"])
+tab1, tab2, tab3 = st.tabs(TOKENS)
 x_vals = list(range(1, 1001))
 buy_vals = [buy_curve(x) for x in x_vals]
 sell_vals = [sell_curve(x) for x in x_vals]
@@ -690,8 +800,9 @@ for token, tab in zip(TOKENS, [tab1, tab2, tab3]):
     )
 
     tab.plotly_chart(fig_curve, use_container_width=True)
- # ===========================================================
 
+st.divider()
+ # ===========================================================
 # Historical portfolio visualization (toggle between buy and sell price)
 price_mode = st.radio("Value holdings at:", ["Buy Price", "Mid Price", "Sell Price"], horizontal=True)
 with closing(get_conn()) as conn:
@@ -706,62 +817,81 @@ with closing(get_conn()) as conn:
 
 if not txp.empty:
     reserves_state = {t: 0 for t in TOKENS}
-    user_state = {int(r.id): {"username": r.username, "balance": STARTING_BALANCE, "holdings": {t: 0 for t in TOKENS}} for _, r in users_df.iterrows()}
+    user_state = {
+        int(r.id): {"username": r.username, "balance": STARTING_BALANCE, "holdings": {t: 0 for t in TOKENS}}
+        for _, r in users_df.iterrows()
+    }
     records = []
 
+    txp["Time"] = pd.to_datetime(txp["Time"])
+
     for _, r in txp.iterrows():
-        uid, act, tkn, qty = int(r["user_id"]), r["Action"], r["Outcome"], int(r["Quantity"])
+        uid = int(r["user_id"])
+        act = r["Action"]
+        tkn = r["Outcome"]
+        qty = int(r["Quantity"])
+
         if act == "Buy":
-            delta = float(r["BuyAmt_Delta"] or 0)
+            delta = float(r["BuyAmt_Delta"] or 0.0)
             user_state[uid]["balance"] -= delta
             user_state[uid]["holdings"][tkn] += qty
             reserves_state[tkn] += qty
-        else:
-            delta = float(r["SellAmt_Delta"] or 0)
+
+        elif act == "Sell":
+            delta = float(r["SellAmt_Delta"] or 0.0)
             user_state[uid]["balance"] += delta
             user_state[uid]["holdings"][tkn] -= qty
             reserves_state[tkn] -= qty
 
-        if price_mode == "Buy Price":
-            prices = {t: buy_curve(reserves_state[t]) for t in TOKENS}
-        elif price_mode == "Sell Price":
-            prices = {t: sell_curve(reserves_state[t]) for t in TOKENS}
-        else:
-             prices = {t: buy_curve(reserves_state[t]) - sell_curve(reserves_state[t]) for t in TOKENS}
+        elif act == "Resolve":
+            # Apply this user's payout (logged in SellAmt_Delta)
+            payout = float(r["SellAmt_Delta"] or 0.0)
+            user_state[uid]["balance"] += payout
 
+            # Zero ALL holdings (winners keep only credited payout; losers go to 0)
+            for u_id in user_state:
+                user_state[u_id]["holdings"] = {t: 0 for t in TOKENS}
+            reserves_state = {t: 0 for t in TOKENS}
+
+        # Pricing for valuation
+        if act == "Resolve":
+            # After resolution, holdings are worthless; prices treated as 0
+            prices = {t: 0.0 for t in TOKENS}
+        else:
+            if price_mode == "Buy Price":
+                prices = {t: buy_curve(reserves_state[t]) for t in TOKENS}
+            elif price_mode == "Sell Price":
+                prices = {t: sell_curve(reserves_state[t]) for t in TOKENS}
+            else:
+                prices = {t: buy_curve(reserves_state[t]) - sell_curve(reserves_state[t]) for t in TOKENS}
+
+        # Snapshot all users at this event time
         for u_id, s in user_state.items():
             pv = s["balance"] + sum(s["holdings"][t] * prices[t] for t in TOKENS)
             pnl = pv - STARTING_BALANCE
             records.append({"Time": r["Time"], "User": s["username"], "PortfolioValue": pv, "PnL": pnl})
 
     port_df = pd.DataFrame(records)
-    fig_port = px.line(port_df, x="Time", y="PortfolioValue", color="User", title=f"Portfolio Value Over Time ({price_mode})")
+    fig_port = px.line(
+        port_df, x="Time", y="PortfolioValue", color="User",
+        title=f"Portfolio Value Over Time ({price_mode})"
+    )
     st.subheader("💼 Portfolio Value History")
     st.plotly_chart(fig_port, use_container_width=True)
 
-    # Leaderboard
-    latest = port_df.sort_values("Time").groupby("User").tail(1).sort_values("PnL", ascending=False)
-
-    # === Leaderboard by Portfolio Value (with PnL vs STARTING_BALANCE) ===
+    # Leaderboard (final snapshot after last event)
+    st.divider()
     st.subheader("🏆 Leaderboard (Portfolio & PnL)")
-
-    # latest snapshot per user
     latest = (
         port_df.sort_values("Time")
         .groupby("User", as_index=False)
         .last()[["User", "PortfolioValue", "PnL"]]
     )
-
-    # recompute PnL defensively (PnL = Portfolio - STARTING_BALANCE)
+        # Exclude admin from leaderboard
+    latest = latest[latest["User"].str.lower() != "admin"]
     latest["PnL"] = latest["PortfolioValue"] - STARTING_BALANCE
-
-    # sort by PnL desc
     latest = latest.sort_values("PnL", ascending=False)
 
-    # pretty display copy (keep numeric originals intact for any further math)
-    disp = latest.copy()
-
-    # optional: top-3 highlight cards
     top_cols = st.columns(min(3, len(latest)))
     for i, (_, row) in enumerate(latest.head(3).iterrows()):
         with top_cols[i]:
@@ -774,7 +904,5 @@ if not txp.empty:
             )
 
     st.dataframe(latest[["User", "PortfolioValue", "PnL"]], use_container_width=True)
-
-    
 else:
     st.info("No transactions yet to compute portfolio history.")
