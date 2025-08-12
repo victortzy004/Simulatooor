@@ -18,6 +18,7 @@ from contextlib import closing
 # Constants
 BASE_EPSILON = 1e-4
 MARKET_DURATION_DAYS = 5
+END_TS = "2025-08-17 00:00"
 DB_PATH = "app.db"
 STARTING_BALANCE = 5000.0
 MARKET_QUESTION = "Price of Ethereum by 17th Aug?"
@@ -259,6 +260,7 @@ if 'user_id' in st.session_state and st.session_state.get("username") == "admin"
             c = conn.cursor()
             start = datetime.utcnow()
             end = start + timedelta(days=MARKET_DURATION_DAYS)
+            # end = END_TS
             # reset market window + clear resolution flags
             c.execute("""
                 UPDATE market
@@ -377,7 +379,8 @@ with st.sidebar:
 
 
 st.sidebar.markdown(f"Start (UTC): {market_start:%Y-%m-%d %H:%M}")
-st.sidebar.markdown(f"End (UTC): {market_end:%Y-%m-%d %H:%M}")
+# st.sidebar.markdown(f"End (UTC): {market_end:%Y-%m-%d %H:%M}")
+st.sidebar.markdown(f"End (UTC): {END_TS}")
 
 if 'user_id' not in st.session_state:
     st.warning("Join with a username on the left to trade.")
@@ -433,7 +436,7 @@ if market_row:
             ">
                 <h4 style="margin-top: 0;">📜 Resolution Rules</h4>
                 <p>
-                    The market will resolve at <b>{pd.to_datetime(end_ts).strftime('%Y-%m-%d %H:%M UTC')}</b>.
+                    The market will resolve at <b>{END_TS}</b>.
                     The winning outcome will receive the <b>entire USDC pool</b>,
                     distributed <i>pro-rata</i> to holders based on their share count.
                 </p>
