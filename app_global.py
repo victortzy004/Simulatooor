@@ -26,7 +26,7 @@ RESOLUTION_NOTE = (
     'This market will resolve according to the final "Close" price of the '
     'Binance 1-minute candle for ETH/USDT at 12:00 UTC.'
 )
-TOKENS = ["<4200", "4200-4500", ">4600"]
+TOKENS = ["<4200", "4200-4600", ">4600"]
 # TOKENS = [f":blue[{TOKENS_TEXT[0]}]", f":blue[{TOKENS_TEXT[1]}]", f":blue[{TOKENS_TEXT[2]}]"]
 
 # Whitelisted usernames and admin reset control
