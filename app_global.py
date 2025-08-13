@@ -26,7 +26,7 @@ RESOLUTION_NOTE = (
     'This market will resolve according to the final "Close" price of the '
     'Binance 1-minute candle for ETH/USDT at 12:00 UTC.'
 )
-TOKENS = ["<4200", "4200-4500", ">4500"]
+TOKENS = ["<4200", "4200-4500", ">4600"]
 # TOKENS = [f":blue[{TOKENS_TEXT[0]}]", f":blue[{TOKENS_TEXT[1]}]", f":blue[{TOKENS_TEXT[2]}]"]
 
 # Whitelisted usernames and admin reset control
@@ -80,7 +80,8 @@ def qty_from_buy_usdc(reserve: int, usdc_amount: float) -> int:
             low = mid
         else:
             high = mid
-    return max(0, int(round(low)))
+    return max(0, math.floor(low))
+
 
 def qty_from_sell_usdc(reserve: int, usdc_amount: float) -> int:
     low, high = 0.0, float(reserve)
@@ -92,7 +93,7 @@ def qty_from_sell_usdc(reserve: int, usdc_amount: float) -> int:
             low = mid
         else:
             high = mid
-    return max(0, int(round(low)))
+    return max(0, math.floor(low))
 
 # ===========================================================
 # DB Helpers
