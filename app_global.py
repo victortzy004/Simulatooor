@@ -20,6 +20,7 @@ BASE_EPSILON = 1e-4
 MARKET_DURATION_DAYS = 5
 END_TS = "2025-08-17 00:00"
 DB_PATH = "app.db"
+MAX_SHARES = 4000
 STARTING_BALANCE = 5000.0
 MARKET_QUESTION = "Price of Ethereum by 17th Aug?"
 RESOLUTION_NOTE = (
@@ -738,7 +739,7 @@ if not tx.empty:
 # Bonding Curves by Outcome with pointers
 st.subheader("🔁 Bonding Curves by Outcome")
 tab1, tab2, tab3 = st.tabs(TOKENS)
-x_vals = list(range(1, 1001))
+x_vals = list(range(1, MAX_SHARES))
 buy_vals = [buy_curve(x) for x in x_vals]
 sell_vals = [sell_curve(x) for x in x_vals]
 
