@@ -221,8 +221,8 @@ with st.sidebar:
                 row = c.execute("SELECT id, balance FROM users WHERE username=?", (username_input,)).fetchone()
                 if not row:
                     cnt = c.execute("SELECT COUNT(*) AS n FROM users").fetchone()["n"]
-                    if cnt >= 10:
-                        st.error("Max 10 users reached. Try another time.")
+                    if cnt >= 20:
+                        st.error("Max 20 users reached. Try another time.")
                         st.stop()
                     c.execute(
                         "INSERT INTO users(username,balance,created_at) VALUES(?,?,?)",
