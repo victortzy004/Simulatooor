@@ -16,19 +16,21 @@ from contextlib import closing
 
 # ===========================================================
 # Constants
+DEFAULT_DECIMAL_PRECISION = 2
 BASE_EPSILON = 1e-4
 MARKET_DURATION_DAYS = 5
-END_TS = "2025-08-17 00:00"
+END_TS = "2025-08-24 00:00"
 DB_PATH = "app.db"
 MAX_SHARES = 4000
-STARTING_BALANCE = 5000.0
-MARKET_QUESTION = "Price of Ethereum by 17th Aug?"
+STARTING_BALANCE = 10000.0
+MARKET_QUESTION = "Will the NASA TOMEX+ sounding rocket mission successfully launch from the Wallops Range by Sunday, August 24, 2025?" # @To-do: Replace
 RESOLUTION_NOTE = (
-    'This market will resolve according to the final "Close" price of the '
-    'Binance 1-minute candle for ETH/USDT at 12:00 UTC.'
-)
-TOKENS = ["<4200", "4200-4600", ">4600"]
-# TOKENS = [f":blue[{TOKENS_TEXT[0]}]", f":blue[{TOKENS_TEXT[1]}]", f":blue[{TOKENS_TEXT[2]}]"]
+'This market will resolve to "YES" if the NASA TOMEX+ sounding rocket is successfully launched from the Wallops Range in New Mexico by 11:59 PM EDT on Sunday, August 24, 2025.' 
+'"Successfully launched" means the rocket leaves the launch pad as intended, regardless of the outcome of the mission itself.'
+'The market will resolve to "NO" if the launch is scrubbed, delayed past the deadline, or if there is no successful launch attempt by the end of the day on Sunday. Resolution will be based on official announcements from NASA and live coverage from reliable news sources.'
+) # @To-do: Replace
+# TOKENS = ["<4200", "4200-4600", ">4600"]
+TOKENS = ["YES", "NO"]
 
 # Whitelisted usernames and admin reset control
 WHITELIST = {"admin", "rui", "haoye", "leo", "steve", "wenbo", "sam", "sharmaine", "mariam", "henry", "guard", "victor", "toby"}
@@ -98,8 +100,6 @@ def qty_from_sell_usdc(reserve: int, usdc_amount: float) -> int:
 
 # ===========================================================
 # DB Helpers
-
-
 def get_conn():
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
@@ -197,9 +197,49 @@ def ensure_market_resolution_columns():
         if "resolved_ts" not in cols:
             conn.execute("ALTER TABLE market ADD COLUMN resolved_ts TEXT")
 
+
+def compute_cost_basis(user_id: int) -> dict:
+    """
+    Returns {token: {'shares': int, 'cost': float, 'avg_cost': float}}
+    using running-average cost basis from the transactions table.
+    - On Buy: add cost and shares.
+    - On Sell: reduce cost proportional to average cost per share.
+    """
+    basis = {t: {'shares': 0, 'cost': 0.0, 'avg_cost': 0.0} for t in TOKENS}
+    with closing(get_conn()) as conn:
+        txu = pd.read_sql_query(
+            """
+            SELECT action, token, qty, buy_delta AS b, sell_delta AS s
+            FROM transactions
+            WHERE user_id=? AND action IN ('Buy','Sell')
+            ORDER BY ts ASC
+            """,
+            conn, params=(user_id,)
+        )
+
+    for _, r in txu.iterrows():
+        t = r['token']
+        q = int(r['qty'] or 0)
+        if r['action'] == 'Buy':
+            add_cost = float(r['b'] or 0.0)
+            basis[t]['cost'] += add_cost
+            basis[t]['shares'] += q
+        elif r['action'] == 'Sell':
+            # reduce cost by avg cost per share * shares sold
+            sh = basis[t]['shares']
+            if sh > 0 and q > 0:
+                avg = basis[t]['cost'] / sh
+                used = min(q, sh)
+                basis[t]['cost'] -= avg * used
+                basis[t]['shares'] -= used
+
+    for t in TOKENS:
+        sh = basis[t]['shares']
+        basis[t]['avg_cost'] = (basis[t]['cost'] / sh) if sh > 0 else 0.0
+    return basis
+
 init_db()
 ensure_market_resolution_columns()
-
 
 
 # ===========================================================
@@ -254,6 +294,15 @@ if "user_id" in st.session_state:
 # ===========================================================
 
 # Admin-only reset market button (use session username)
+def reseed_reserves(c):
+    """Wipe all reserves rows and re-seed zeroed rows for current TOKENS."""
+    # why: remove stale tokens from previous sessions so totals reset to 0 correctly
+    c.execute("DELETE FROM reserves")
+    for t in TOKENS:
+        c.execute("INSERT INTO reserves(token, shares, usdc) VALUES(?,?,?)", (t, 0, 0.0))
+
+
+# Admin-only reset market button (use session username)
 if 'user_id' in st.session_state and st.session_state.get("username") == "admin":
     st.sidebar.subheader("Admin Controls")
     wipe_users = st.sidebar.checkbox("Reset all users (wipe accounts)", value=False)
@@ -276,6 +325,9 @@ if 'user_id' in st.session_state and st.session_state.get("username") == "admin"
             # reset reserves
             for t in TOKENS:
                 c.execute("UPDATE reserves SET shares=0, usdc=0 WHERE token=?", (t,))
+
+            # *** Key fix: wipe & re-seed reserves so Total USDC Reserve goes to 0 ***
+            reseed_reserves(c)
 
             if wipe_users:
                 # full wipe of user state
@@ -357,19 +409,24 @@ with closing(get_conn()) as conn:
     if row and int(row["resolved"] or 0) == 1:
         st.success(f"✅ Resolved — Winner: {row['winner_token']}")
 
-
-
+# ===========================================================
 # Market status
 with closing(get_conn()) as conn:
     cur = conn.cursor()
     cur.execute("SELECT start_ts,end_ts,winner_token,resolved FROM market WHERE id=1")
     m = cur.fetchone()
     market_start = datetime.fromisoformat(m["start_ts"])
-    market_end = datetime.fromisoformat(m["end_ts"])
+    market_end_db = datetime.fromisoformat(m["end_ts"])
     resolved_flag = int(m["resolved"] or 0)
-    now = datetime.utcnow()
-    active = (market_start <= now <= market_end) and (resolved_flag == 0)
 
+now = datetime.utcnow()
+hard_end = datetime.fromisoformat(END_TS)   # <-- enforce constant cutoff
+
+# Market is active only if:
+# 1) within DB market window
+# 2) before hard END_TS cutoff
+# 3) not resolved
+active = (market_start <= now <= market_end_db) and (now <= hard_end) and (resolved_flag == 0)
 
     # Sidebar market status row
 with st.sidebar:
@@ -426,7 +483,6 @@ if market_row:
             unsafe_allow_html=True
         )
     else:
-        # Market still active - show rules/reminder
         st.markdown(
             f"""
             <div style="
@@ -448,6 +504,13 @@ if market_row:
                 <p>
                     After resolution, all holdings will be cleared and balances updated automatically.
                 </p>
+                <h5>🔗 Resolution Sources/Resources:</h5>
+                <ul>
+                    <li><a href="https://www.nasa.gov/blogs/wallops/2025/08/15/turbulence-at-edge-of-space/" target="_blank">
+                        NASA Blog: Turbulence at Edge of Space (Aug 15, 2025)</a></li>
+                    <li><a href="https://www.nasa.gov/blogs/wallops-range/" target="_blank">
+                        NASA Wallops Range Blog</a></li>
+                </ul>
             </div>
             """,
             unsafe_allow_html=True
@@ -509,7 +572,50 @@ if 'user_id' in st.session_state:
                 st.text(f"Price: {price:.4f}")
                 st.text(f"Value: ${val:,.2f}")
 
+# === Cost basis & per-token PnL table ===
+user_id = st.session_state.get("user_id")
+if user_id is not None:
+    basis = compute_cost_basis(user_id)
 
+    # pool stats for estimated payout if token wins now
+    with closing(get_conn()) as conn:
+        rows = conn.execute("SELECT token, shares, usdc FROM reserves").fetchall()
+    reserves_now = {r["token"]: {"shares": int(r["shares"]), "usdc": float(r["usdc"])} for r in rows}
+    total_pool_now = float(sum(r["usdc"] for r in reserves_now.values()))
+
+
+    pnl_rows = []
+    for t in TOKENS:
+        sh = int(basis[t]['shares'])
+        avg = float(basis[t]['avg_cost'])
+        pos_cost = float(basis[t]['cost'])
+        price_now_token = float(prices[t])  # rename from px -> price_now_token to prevent override
+        mv = sh * price_now_token
+        unreal = mv - pos_cost
+        pnl_pct = (unreal / pos_cost * 100.0) if pos_cost > 0 else 0.0
+
+        win_shares_now = max(1, int(reserves_now.get(t, {}).get('shares', 0)))
+        est_payout_if_win = 0.0
+        if total_pool_now > 0 and win_shares_now > 0 and sh > 0:
+            est_payout_if_win = total_pool_now * (sh / win_shares_now)
+
+        pnl_rows.append({
+            "Token": t,
+            "Shares": sh,
+            "Avg Cost/Share": round(avg, DEFAULT_DECIMAL_PRECISION),
+            "Position Cost": round(pos_cost, DEFAULT_DECIMAL_PRECISION),
+            "Price Now": round(price_now_token, DEFAULT_DECIMAL_PRECISION),
+            "Market Value": round(mv, DEFAULT_DECIMAL_PRECISION),
+            "Unrealized PnL": round(unreal, DEFAULT_DECIMAL_PRECISION),
+            "PnL %": round(pnl_pct, DEFAULT_DECIMAL_PRECISION),
+            "Est. Payout if Wins": round(est_payout_if_win, DEFAULT_DECIMAL_PRECISION),
+            "Est. Win PnL": round(est_payout_if_win - pos_cost, DEFAULT_DECIMAL_PRECISION)
+        })
+
+    pnl_df = pd.DataFrame(pnl_rows)
+
+    st.markdown("**Per-Token Position & PnL**")
+    st.dataframe(pnl_df, use_container_width=True)
 
 # Common Trading UI
 input_mode = st.radio("Select Input Mode", ["Quantity", "USDC"], horizontal=True)
@@ -522,7 +628,7 @@ else:
     usdc_input = st.number_input("Enter USDC Amount", min_value=0.0, step=0.1)
 
 st.subheader("Buy/Sell Controls")
-cols = st.columns(3)
+cols = st.columns(4)
 
 # Fetch current reserves (DB)
 with closing(get_conn()) as conn:
@@ -531,16 +637,49 @@ with closing(get_conn()) as conn:
     reserves_map = {t: {"shares": s, "usdc": u} for t, s, u in cur.fetchall()}
 
 for i, token in enumerate(TOKENS):
+
+    
     with cols[i]:
         st.markdown(f"### Outcome :blue[{token}]")
 
         reserve = int(reserves_map[token]["shares"])  # global shares for token
-        price_now = round(buy_curve(reserve), 4)
+        price_now = round(buy_curve(reserve), 2)
         mcap_now = round(reserves_map[token]["usdc"], 2)
         st.text(f"Current Price: {price_now}")
         st.text(f"MCAP: {mcap_now}")
 
+         # --- Preview section (live estimate) ---
+        # derive est quantities from current inputs (without executing)
+        if input_mode == "Quantity":
+            est_q_buy = quantity
+            est_q_sell = quantity
+        else:
+            est_q_buy = qty_from_buy_usdc(reserve, usdc_input)
+            est_q_sell = qty_from_sell_usdc(reserve, usdc_input)
+
+        # compute deltas for estimates (clamp to non-negative)
+        est_q_buy = max(0, int(est_q_buy))
+        est_q_sell = max(0, int(est_q_sell))
+
+        # buy estimate
+        if est_q_buy > 0:
+            _, _, est_buy_cost, _ = metrics_from_qty(reserve, est_q_buy)
+        else:
+            est_buy_cost = 0.0
+
+        # sell estimate
+        if est_q_sell > 0:
+            _, _, _, est_sell_proceeds = metrics_from_qty(reserve, est_q_sell)
+        else:
+            est_sell_proceeds = 0.0
+
+        st.caption(
+            f"Est. Buy Cost ({est_q_buy}x sh): **{est_buy_cost:,.2f} USDC**  \n"
+            f"Est. Sell Proceeds ({est_q_sell}x sh): **{est_sell_proceeds:,.2f} USDC**"
+        )
+
         buy_col, sell_col = st.columns(2)
+
 
         # --- BUY ---
         with buy_col:
@@ -738,7 +877,7 @@ if not tx.empty:
 # ===========================================================
 # Bonding Curves by Outcome with pointers
 st.subheader("🔁 Bonding Curves by Outcome")
-tab1, tab2, tab3 = st.tabs(TOKENS)
+tabs = st.tabs(TOKENS) # Change tab
 x_vals = list(range(1, MAX_SHARES))
 buy_vals = [buy_curve(x) for x in x_vals]
 sell_vals = [sell_curve(x) for x in x_vals]
@@ -746,7 +885,7 @@ sell_vals = [sell_curve(x) for x in x_vals]
 with closing(get_conn()) as conn:
     latest_reserves = {r["token"]: r["shares"] for r in conn.execute("SELECT token, shares FROM reserves").fetchall()}
 
-for token, tab in zip(TOKENS, [tab1, tab2, tab3]):
+for token, tab in zip(TOKENS, tabs):
     reserve = int(latest_reserves.get(token, 0))
     buy_price_now = buy_curve(reserve)
     sell_price_now = sell_curve(reserve)
@@ -897,17 +1036,21 @@ if not txp.empty:
     latest["PnL"] = latest["PortfolioValue"] - STARTING_BALANCE
     latest = latest.sort_values("PnL", ascending=False)
 
-    top_cols = st.columns(min(3, len(latest)))
-    for i, (_, row) in enumerate(latest.head(3).iterrows()):
-        with top_cols[i]:
-            delta_val = f"${row['PnL']:,.2f}" if row['PnL'] >= 0 else f"-${abs(row['PnL']):,.2f}"
-            st.metric(
-                label=f"#{i+1} {row['User']}",
-                value=f"${row['PortfolioValue']:,.2f}",
-                delta=delta_val,
-                border=True
-            )
+    # check if zero filter
+    if latest.empty:
+        st.info("No eligible users to display yet.")
+    else:
+        top_cols = st.columns(min(3, len(latest)))
+        for i, (_, row) in enumerate(latest.head(3).iterrows()):
+            with top_cols[i]:
+                delta_val = f"${row['PnL']:,.2f}" if row['PnL'] >= 0 else f"-${abs(row['PnL']):,.2f}"
+                st.metric(
+                    label=f"#{i+1} {row['User']}",
+                    value=f"${row['PortfolioValue']:,.2f}",
+                    delta=delta_val,
+                    border=True
+                )
 
-    st.dataframe(latest[["User", "PortfolioValue", "PnL"]], use_container_width=True)
+        st.dataframe(latest[["User", "PortfolioValue", "PnL"]], use_container_width=True)
 else:
     st.info("No transactions yet to compute portfolio history.")
