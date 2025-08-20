@@ -13,9 +13,7 @@ BASE_EPSILON = 1e-4
 OUTCOMES = ['A', 'B', 'C']
 MAX_SHARES = 4000
 
-# ===========================================================
-# Functions
-
+APP_MODES = ["Curve Viewer", "Simulator"]
 
 # ===========================================================
 # Curve Sets (plug your own functions here)
@@ -95,7 +93,7 @@ st.title("42: Twin Bonding Curve Simulatoooor")
 
 with st.sidebar:
     st.header("Mode")
-    app_mode = st.radio("Choose view", ["Simulator", "Curve Viewer"], index=0)
+    app_mode = st.radio("Choose view", APP_MODES, index=0)
 
 with st.sidebar:
     st.header("Curve Settings")
@@ -136,12 +134,6 @@ with st.sidebar:
     use_preset_for_markers = (qty_mode == "Preset list")
 
 
-# # Curve set & visualization controls
-# with st.sidebar:
-#     st.header("Curve Settings")
-#     curve_choice = st.selectbox("Curve set", list(CURVE_SETS.keys()), index=0)
-#     preset_qty = st.selectbox("Preset share quantity (for charts)", [100, 1000, 2500, 5000, 7500, 10000], index=1)
-#     use_preset_for_markers = st.toggle("Use preset quantity for chart markers (instead of live reserves)", value=True)
 
 st.caption(f"Active curve set: **{curve_choice}**")
 # Bind active curve functions for the rest of the app
@@ -213,12 +205,6 @@ def render_curve_viewer():
     st.subheader("🔁 Bonding Curves Visualisation")
 
     token_label = "Outcome"  # cosmetic label only
-
-    # # Build x-range (respect custom axis controls)
-    # if x_mode == "Custom":
-    #     x_vals = list(range(int(x_min), int(x_max)))
-    # else:
-    #     x_vals = list(range(1, MAX_SHARES))
 
         # Marker quantity: preset, custom, or live (A)
     if qty_mode == "Preset list":
