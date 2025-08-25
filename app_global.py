@@ -1,8 +1,3 @@
-
-
-
-
-
 # file: app.py
 import streamlit as st
 from datetime import datetime, timedelta
@@ -14,27 +9,47 @@ import plotly.graph_objects as go
 import sqlite3
 from contextlib import closing
 
+# to change -> question, resolution note and tokens.
 # ===========================================================
 # Constants
 DEFAULT_DECIMAL_PRECISION = 2
 BASE_EPSILON = 1e-4
 MARKET_DURATION_DAYS = 5
-END_TS = "2025-08-24 00:00"
+END_TS = "2025-08-29 00:00"
 DB_PATH = "app.db"
-MAX_SHARES = 4000
-STARTING_BALANCE = 10000.0
-MARKET_QUESTION = "Will the NASA TOMEX+ sounding rocket mission successfully launch from the Wallops Range by Sunday, August 24, 2025?" # @To-do: Replace
+MAX_SHARES = 500000 #10M
+STARTING_BALANCE = 50000.0 #50k
+MARKET_QUESTION = "Will the total crypto market cap be larger than NVIDIA's market cap by the 29th Aug?"
+
 RESOLUTION_NOTE = (
-'This market will resolve to "YES" if the NASA TOMEX+ sounding rocket is successfully launched from the Wallops Range in New Mexico by 11:59 PM EDT on Sunday, August 24, 2025.' 
-'"Successfully launched" means the rocket leaves the launch pad as intended, regardless of the outcome of the mission itself.'
-'The market will resolve to "NO" if the launch is scrubbed, delayed past the deadline, or if there is no successful launch attempt by the end of the day on Sunday. Resolution will be based on official announcements from NASA and live coverage from reliable news sources.'
-) # @To-do: Replace
+    'This market will resolve to "YES" if the total cryptocurrency market capitalization '
+    'as reported by CoinGecko is greater than the market capitalization of NVIDIA (NVDA) '
+    'as reported by Yahoo Finance at the resolution timestamp. '
+    'It will resolve to "NO" otherwise. '
+    'If either source is unavailable or shows materially inconsistent data, the admins will use reasonable judgment to determine resolution.'
+)
 # TOKENS = ["<4200", "4200-4600", ">4600"]
-TOKENS = ["YES", "NO"]
+TOKENS = ["YES", "NO"] 
 
 # Whitelisted usernames and admin reset control
 WHITELIST = {"admin", "rui", "haoye", "leo", "steve", "wenbo", "sam", "sharmaine", "mariam", "henry", "guard", "victor", "toby"}
 
+# Inflection Points
+EARLY_QUANTITY_POINT = 270
+MID_QUANTITY_POINT = 630
+
+# ==== Points System (tunable) ====
+TRADE_POINTS_PER_USD = 10.0   # Buy & Sell volume → 10 pts per $1 traded
+PNL_POINTS_PER_USD   = 5.0    # Only for positive PnL → 5 pts per $1 profit
+EARLY_MULTIPLIER     = 1.5    # Applies to Buy $ when reserve < EARLY_QUANTITY_POINT
+MID_MULTIPLIER       = 1.25   # Applies to Buy $ when reserve < MID_QUANTITY_POINT
+LATE_MULTIPLIER      = 1.0    # Applies to Buy $ when reserve >= MID_QUANTITY_POINT
+
+PHASE_MULTIPLIERS = {
+    "early": EARLY_MULTIPLIER,
+    "mid": MID_MULTIPLIER,
+    "late": LATE_MULTIPLIER,
+}
 # ===========================================================
 # Streamlit Setup
 st.set_page_config(page_title="42: Simulatoooor (Global)", layout="wide")
@@ -50,18 +65,28 @@ def st_display_market_status(active):
 
 # ===========================================================
 # Math Helpers (curves)
-
 def buy_curve(x: float) -> float:
-    return x**(1/4) + x / 400
+    return (x**(1/3)/1000) + 0.1
+    # return x**(1/4) + x / 400
 
 def sell_curve(x: float) -> float:
-    return ((x - 500)/40) / ((8 + ((x - 500)/80)**2)**0.5) + (x - 500)/300 + 3.6
+    t = (x - 500000.0) / 1_000_000.0
+    p = 1.0 / (4.0 * (0.8 + math.exp(-t))) - 0.05
+    return max(p,0.0)
+    # return ((x - 500)/40) / ((8 + ((x - 500)/80)**2)**0.5) + (x - 500)/300 + 3.6
 
 def buy_delta(x: float) -> float:
-    return (640 * x**(5/4) + x**2) / 800
+    return (3.0/4000.0) * (x**(4.0/3.0)) + x/10.0
+    # return (640 * x**(5/4) + x**2) / 800
 
 def sell_delta(x: float) -> float:
-    return 1.93333 * x + 0.00166667 * x**2 + 2 * math.sqrt(301200 - 1000 * x + x**2)
+    """
+    ∫ y dx = 312500 * ln(1 + 0.8 * e^{(x-500000)/1e6}) - 0.05*x + C, C=0
+    """
+    t = (x - 500000.0) / 1_000_000.0
+    # use log1p for better numerical stability
+    return 312_500.0 * math.log1p(0.8 * math.exp(t)) - 0.05 * x
+    # return 1.93333 * x + 0.00166667 * x**2 + 2 * math.sqrt(301200 - 1000 * x + x**2)
 
 def metrics_from_qty(x: int, q: int):
     new_x = x + q
@@ -71,32 +96,68 @@ def metrics_from_qty(x: int, q: int):
     sell_amt_delta = sell_delta(x) - sell_delta(x - q) if x - q >= 0 else 0.0
     return buy_price, sell_price, buy_amt_delta, sell_amt_delta
 
+def qty_from_buy_usdc(reserve: int, usd: float) -> int:
+    if usd <= 0:
+        return 0
+    # initial guess: linear approximation
+    q = usd / max(buy_curve(reserve), 1e-9)
+    q = max(0.0, min(q, MAX_SHARES - reserve))
+
+    for _ in range(12):
+        f  = (buy_delta(reserve + q) - buy_delta(reserve)) - usd
+        fp = max(buy_curve(reserve + q), 1e-9)  # df/dq
+        step = f / fp
+        q -= step
+        # clamp
+        if q < 0.0: q = 0.0
+        if q > (MAX_SHARES - reserve): q = float(MAX_SHARES - reserve)
+        if abs(step) < 1e-6:
+            break
+    return int(q)
+
+def qty_from_sell_usdc(reserve: int, usd: float) -> int:
+    if usd <= 0:
+        return 0
+    # initial guess: linear approx using current sell price
+    q = usd / max(sell_curve(reserve), 1e-9)
+    q = max(0.0, min(q, float(reserve)))
+
+    for _ in range(12):
+        f  = (sell_delta(reserve) - sell_delta(reserve - q)) - usd
+        fp = max(sell_curve(reserve - q), 1e-9)  # df/dq = price at (reserve - q)
+        step = f / fp
+        q -= step
+        if q < 0.0: q = 0.0
+        if q > reserve: q = float(reserve)
+        if abs(step) < 1e-6:
+            break
+    return int(q)
 # Binary searches
 
-def qty_from_buy_usdc(reserve: int, usdc_amount: float) -> int:
-    low, high = 0.0, 10000.0
-    eps = BASE_EPSILON
-    while high - low > eps:
-        mid = (low + high) / 2
-        delta = buy_delta(reserve + mid) - buy_delta(reserve)
-        if delta < usdc_amount:
-            low = mid
-        else:
-            high = mid
-    return max(0, math.floor(low))
+# def qty_from_buy_usdc(reserve: int, usdc_amount: float) -> int:
+#     low, high = 0.0, 10000000
+#     eps = BASE_EPSILON
+#     while high - low > eps:
+#         mid = (low + high) / 2
+#         delta = buy_delta(reserve + mid) - buy_delta(reserve)
+#         if delta < usdc_amount:
+#             low = mid
+#         else:
+#             high = mid
+#     return max(0, math.floor(low))
 
 
-def qty_from_sell_usdc(reserve: int, usdc_amount: float) -> int:
-    low, high = 0.0, float(reserve)
-    eps = BASE_EPSILON
-    while high - low > eps:
-        mid = (low + high) / 2
-        delta = sell_delta(reserve) - sell_delta(reserve - mid)
-        if delta < usdc_amount:
-            low = mid
-        else:
-            high = mid
-    return max(0, math.floor(low))
+# def qty_from_sell_usdc(reserve: int, usdc_amount: float) -> int:
+#     low, high = 0.0, float(reserve)
+#     eps = BASE_EPSILON
+#     while high - low > eps:
+#         mid = (low + high) / 2
+#         delta = sell_delta(reserve) - sell_delta(reserve - mid)
+#         if delta < usdc_amount:
+#             low = mid
+#         else:
+#             high = mid
+#     return max(0, math.floor(low))
 
 # ===========================================================
 # DB Helpers
@@ -186,6 +247,12 @@ def init_db():
         # Seed reserves A/B/C
         for t in TOKENS:
             c.execute("INSERT OR IGNORE INTO reserves(token,shares,usdc) VALUES(?,?,?)", (t, 0, 0.0))
+        # Create indexes
+        c.execute("CREATE INDEX IF NOT EXISTS idx_tx_user_time ON transactions(user_id, ts)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_tx_time ON transactions(ts)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_holdings_user ON holdings(user_id)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_reserves_token ON reserves(token)")
+        c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username)")
 
 def ensure_market_resolution_columns():
     with closing(get_conn()) as conn, conn:
@@ -238,8 +305,283 @@ def compute_cost_basis(user_id: int) -> dict:
         basis[t]['avg_cost'] = (basis[t]['cost'] / sh) if sh > 0 else 0.0
     return basis
 
+# For points computation
+def compute_user_points(tx_df: pd.DataFrame, users_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Returns a DataFrame with columns:
+      User, VolumePoints, PnLPoints, TotalPoints
+    Volume points:
+      - 10 pts per $1 traded (Buy or Sell)
+      - Buy $ gets a phase multiplier based on *reserve before* the Buy:
+          < EARLY_QUANTITY_POINT → 1.5x
+          < MID_QUANTITY_POINT   → 1.25x
+          >= MID_QUANTITY_POINT  → 1.0x
+    PnL points:
+      - 5 pts per $1 profit (only positive PnL), using the latest portfolio PnL snapshot
+        we compute below when we build the leaderboard.
+    """
+    # Map id -> username
+    id_to_user = dict(zip(users_df["id"], users_df["username"]))
+
+    # Running reserves per token to know the *phase at time of each buy*
+    reserves_state = {t: 0 for t in TOKENS}
+
+    # Per-user accumulators
+    vol_points = {uid: 0.0 for uid in users_df["id"]}
+    # We'll add PnL points later (when we know latest PnL)
+
+    # Process chronologically
+    tdf = tx_df.copy()
+    tdf["Time"] = pd.to_datetime(tdf["Time"])
+    tdf = tdf.sort_values("Time")
+
+    for _, r in tdf.iterrows():
+        uid  = int(r["user_id"])
+        act  = r["Action"]
+        tkn  = r["Outcome"]
+        qty  = int(r["Quantity"])
+
+        if act == "Buy":
+            # Dollars traded for this buy
+            buy_usd = float(r["BuyAmt_Delta"] or 0.0)
+
+            # Determine phase by reserve BEFORE adding qty
+            r_before = reserves_state.get(tkn, 0)
+            if r_before < EARLY_QUANTITY_POINT:
+                mult = EARLY_MULTIPLIER
+            elif r_before < MID_QUANTITY_POINT:
+                mult = MID_MULTIPLIER
+            else:
+                mult = LATE_MULTIPLIER
+
+            vol_points[uid] += buy_usd * TRADE_POINTS_PER_USD * mult
+
+            # Update state
+            reserves_state[tkn] = r_before + qty
+
+        elif act == "Sell":
+            sell_usd = float(r["SellAmt_Delta"] or 0.0)
+            vol_points[uid] += sell_usd * TRADE_POINTS_PER_USD
+
+            # Update state (post-sell)
+            reserves_state[tkn] = reserves_state.get(tkn, 0) - qty
+
+        # "Resolve" does not change volume points
+
+    # Build dataframe (PnL points will be joined later)
+    out = pd.DataFrame({
+        "user_id": list(vol_points.keys()),
+        "User":    [id_to_user[uid] for uid in vol_points.keys()],
+        "VolumePoints": [vol_points[uid] for uid in vol_points.keys()]
+    })
+
+    return out
+
+
+def compute_points_timeline(txp: pd.DataFrame, users_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Build a timeline of points per user at each transaction timestamp.
+    TotalPoints(t) = CumulativeVolumePoints(t) + max(PnL(t), 0) * PNL_POINTS_PER_USD
+    PnL(t) is instantaneous (not cumulative) based on reconstructed portfolio valuation.
+
+    Phase rules (for BUY only), decided on reserve *before* applying the buy:
+        reserve < EARLY_QUANTITY_POINT -> early
+        EARLY_QUANTITY_POINT <= reserve < MID_QUANTITY_POINT -> mid
+        reserve >= MID_QUANTITY_POINT -> late
+    """
+
+    # Defensive copy & types
+    df = txp.copy()
+    if df.empty:
+        return pd.DataFrame(columns=["Time","User","VolumePointsCum","PnLPointsInstant","TotalPoints"])
+
+    df["Time"] = pd.to_datetime(df["Time"])
+
+    # States to reconstruct reserves + user portfolios
+    reserves_state = {t: 0 for t in TOKENS}
+    user_state = {
+        int(r.id): {"username": r.username, "balance": STARTING_BALANCE, "holdings": {t: 0 for t in TOKENS}}
+        for _, r in users_df.iterrows()
+    }
+
+    # Cumulative volume points per user
+    vol_points = {int(r.id): 0.0 for _, r in users_df.iterrows()}
+
+    rows = []
+
+    for _, r in df.iterrows():
+        uid = int(r["user_id"])
+        act = r["Action"]
+        tkn = r["Outcome"]
+        qty = int(r["Quantity"])
+
+        # --- Volume points increment (if any) ---
+        add_points = 0.0
+        if act == "Buy":
+            buy_usd = float(r["BuyAmt_Delta"] or 0.0)
+            # Phase by reserve BEFORE buy
+            reserve_before = reserves_state[tkn]
+            if reserve_before < EARLY_QUANTITY_POINT:
+                mult = PHASE_MULTIPLIERS["early"]
+            elif reserve_before < MID_QUANTITY_POINT:
+                mult = PHASE_MULTIPLIERS["mid"]
+            else:
+                mult = PHASE_MULTIPLIERS["late"]
+            add_points = buy_usd * TRADE_POINTS_PER_USD * mult
+
+        elif act == "Sell":
+            sell_usd = float(r["SellAmt_Delta"] or 0.0)
+            # Sells: volume points = 10 pts / $1 (no multiplier)
+            add_points = sell_usd * TRADE_POINTS_PER_USD
+
+        # accumulate
+        vol_points[uid] += float(add_points)
+
+        # --- Apply the transaction to portfolio/reserves reconstruction ---
+        if act == "Buy":
+            delta = float(r["BuyAmt_Delta"] or 0.0)
+            user_state[uid]["balance"] -= delta
+            user_state[uid]["holdings"][tkn] += qty
+            reserves_state[tkn] += qty
+
+        elif act == "Sell":
+            delta = float(r["SellAmt_Delta"] or 0.0)
+            user_state[uid]["balance"] += delta
+            user_state[uid]["holdings"][tkn] -= qty
+            reserves_state[tkn] -= qty
+
+        elif act == "Resolve":
+            # credit this user's payout (logged as SellAmt_Delta)
+            payout = float(r["SellAmt_Delta"] or 0.0)
+            user_state[uid]["balance"] += payout
+
+            # wipe all holdings and reserves
+            for u_id in user_state:
+                user_state[u_id]["holdings"] = {t: 0 for t in TOKENS}
+            reserves_state = {t: 0 for t in TOKENS}
+
+        # --- Price snapshot (use Buy curve for valuation consistency) ---
+        if act == "Resolve":
+            prices = {t: 0.0 for t in TOKENS}
+        else:
+            prices = {t: buy_curve(reserves_state[t]) for t in TOKENS}
+
+        # --- Build a row per user at this timestamp ---
+        ts = r["Time"]
+        for u_id, s in user_state.items():
+            pv = s["balance"] + sum(s["holdings"][t] * prices[t] for t in TOKENS)
+            pnl_instant = max(pv - STARTING_BALANCE, 0.0)
+            pnl_points = pnl_instant * PNL_POINTS_PER_USD
+            total_points = vol_points[u_id] + pnl_points
+
+            rows.append({
+                "Time": ts,
+                "user_id": u_id,
+                "User": s["username"],
+                "VolumePointsCum": vol_points[u_id],
+                "PnLPointsInstant": pnl_points,
+                "TotalPoints": total_points,
+            })
+
+    return pd.DataFrame(rows)
+
+
 init_db()
 ensure_market_resolution_columns()
+
+
+
+@st.cache_data(show_spinner=False)
+def cached_curve_samples(max_shares:int, reserve:int):
+    xs = _curve_samples(max_shares, reserve)
+    return xs, buy_curve_np(xs), sell_curve_np(xs)
+
+@st.cache_data(show_spinner=False)
+def load_tx_and_users(cache_key:int):
+    with closing(get_conn()) as conn:
+        txp = pd.read_sql_query("""SELECT ...""", conn)
+        users_df = pd.read_sql_query("SELECT id, username FROM users ORDER BY id", conn)
+    return txp, users_df
+
+# Use the max tx timestamp as an invalidation key (so we don’t need to bump on every write)
+def latest_tx_epoch() -> int:
+    with closing(get_conn()) as conn:
+        r = conn.execute("SELECT COALESCE(MAX(ts),'1970-01-01T00:00:00') AS mx FROM transactions").fetchone()
+    return int(pd.to_datetime(r["mx"]).value)  # nanoseconds
+
+# cache_key = latest_tx_epoch()
+# txp, users_df = load_tx_and_users(cache_key)
+
+def compute_points_timeline_fast(txp: pd.DataFrame, users_df: pd.DataFrame) -> pd.DataFrame:
+    if txp.empty:
+        return pd.DataFrame(columns=["Time","User","VolumePointsCum","PnLPointsInstant","TotalPoints"])
+
+    U = len(users_df); T = len(TOKENS)
+    uid_index = {int(u.id): i for _, u in users_df.iterrows()}
+    token_index = {t: i for i, t in enumerate(TOKENS)}
+
+    balances = np.full(U, STARTING_BALANCE, dtype=np.float64)
+    holdings = np.zeros((U, T), dtype=np.int64)
+    reserves = np.zeros(T, dtype=np.int64)
+    vol_points = np.zeros(U, dtype=np.float64)
+
+    rows = []
+    for _, r in txp.sort_values("Time").iterrows():
+        u = uid_index[int(r["user_id"])]
+        k = token_index[r["Outcome"]]
+        act = r["Action"]; q = int(r["Quantity"])
+
+        if act == "Buy":
+            usd = float(r["BuyAmt_Delta"] or 0.0)
+            # phase multiplier by reserve BEFORE buy
+            rb = reserves[k]
+            mult = EARLY_MULTIPLIER if rb < EARLY_QUANTITY_POINT else (MID_MULTIPLIER if rb < MID_QUANTITY_POINT else LATE_MULTIPLIER)
+            vol_points[u] += usd * TRADE_POINTS_PER_USD * mult
+
+            balances[u] -= usd
+            holdings[u, k] += q
+            reserves[k] += q
+
+        elif act == "Sell":
+            usd = float(r["SellAmt_Delta"] or 0.0)
+            vol_points[u] += usd * TRADE_POINTS_PER_USD
+
+            balances[u] += usd
+            holdings[u, k] -= q
+            reserves[k] -= q
+
+        elif act == "Resolve":
+            usd = float(r["SellAmt_Delta"] or 0.0)
+            balances[u] += usd
+            holdings[:, :] = 0
+            reserves[:] = 0
+
+        # prices for this snapshot
+        if act == "Resolve":
+            prices = np.zeros(T, dtype=np.float64)
+        else:
+            # buy price for valuation (your original choice)
+            # vectorize across tokens
+            px = np.array([buy_curve(int(res)) for res in reserves], dtype=np.float64)
+            prices = px
+
+        # vectorized PV + points
+        pv = balances + (holdings @ prices)
+        pnl_points = np.maximum(pv - STARTING_BALANCE, 0.0) * PNL_POINTS_PER_USD
+        total = vol_points + pnl_points
+
+        # append as one block
+        ts = pd.to_datetime(r["Time"])
+        rows.extend({
+            "Time": ts,
+            "user_id": int(users_df.iloc[i].id),
+            "User": users_df.iloc[i].username,
+            "VolumePointsCum": float(vol_points[i]),
+            "PnLPointsInstant": float(pnl_points[i]),
+            "TotalPoints": float(total[i]),
+        } for i in range(U))
+
+    return pd.DataFrame(rows)
 
 
 # ===========================================================
@@ -484,37 +826,30 @@ if market_row:
         )
     else:
         st.markdown(
-            f"""
-            <div style="
-                background-color: grey;
-                padding: 1rem;
-                border-radius: 0.5rem;
-                border: 1px solid #a5b4fc;
-                margin-bottom: 1rem;
-            ">
-                <h4 style="margin-top: 0;">📜 Resolution Rules</h4>
-                <p>
-                    The market will resolve at <b>{END_TS}</b>.
-                    The winning outcome will receive the <b>entire USDC pool</b>,
-                    distributed <i>pro-rata</i> to holders based on their share count.
-                </p>
-                <p>
-                    <b>Resolution Note:</b> {RESOLUTION_NOTE}
-                </p>
-                <p>
-                    After resolution, all holdings will be cleared and balances updated automatically.
-                </p>
-                <h5>🔗 Resolution Sources/Resources:</h5>
-                <ul>
-                    <li><a href="https://www.nasa.gov/blogs/wallops/2025/08/15/turbulence-at-edge-of-space/" target="_blank">
-                        NASA Blog: Turbulence at Edge of Space (Aug 15, 2025)</a></li>
-                    <li><a href="https://www.nasa.gov/blogs/wallops-range/" target="_blank">
-                        NASA Wallops Range Blog</a></li>
-                </ul>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
+                f"""
+                <div style="background-color: grey; padding: 1rem; border-radius: 0.5rem; border: 1px solid #a5b4fc; margin-bottom: 1rem;">
+                    <h4 style="margin-top: 0;">📜 Resolution Rules</h4>
+                    <p>
+                        The market will resolve at <b>{END_TS}</b>.
+                        The winning outcome will receive the <b>entire USDC pool</b>,
+                        distributed <i>pro-rata</i> to holders based on their share count.
+                    </p>
+                    <p>
+                        <b>Resolution Note:</b> {RESOLUTION_NOTE}
+                    </p>
+                    <p>
+                        After resolution, all holdings will be cleared and balances updated automatically.
+                    </p>
+                    <h5>🔗 Resolution Sources/Resources:</h5>
+                    <ul>
+                        <li><a href="https://www.coingecko.com/" target="_blank">CoinGecko: Total Crypto Market Cap</a></li>
+                        <li><a href="https://finance.yahoo.com/quote/NVDA/" target="_blank">Yahoo Finance: NVIDIA (NVDA)</a></li>
+                    </ul>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+        st.divider()
 
 if 'user_id' in st.session_state:
     with closing(get_conn()) as conn:
@@ -550,27 +885,75 @@ if 'user_id' in st.session_state:
 
     with st.container(border=True):
         st.subheader("Your Account")
-        ucols = st.columns(4)
-        with ucols[0]:
-            st.metric("Username", st.session_state.get("username",""))
-        with ucols[1]:
-            st.metric("Portfolio (USD)", f"{portfolio_value:,.2f}")
-        with ucols[2]:
-            st.metric("Balance (USDC)", f"{bal:,.2f}")
-        with ucols[3]:
-            st.metric("Shares Holdings Value (USD)", f"{holdings_total_value:,.2f}")
+        st.metric("Username", st.session_state.get("username",""))
+  
+
+        with st.container():
+            overall_cols = st.columns(2)
+
+            with overall_cols[0]:
+                with st.container(border=True):
+                    st.subheader("Portfolio")
+                    ucols = st.columns(3)
+                    with ucols[0]:
+                        st.metric("Overall Value (USD)", f"{portfolio_value:,.2f}")
+                    with ucols[1]:
+                        st.metric("Balance (USDC)", f"{bal:,.2f}")
+                    with ucols[2]:
+                        st.metric("Shares Holdings Value (USD)", f"{holdings_total_value:,.2f}")
+
+            # --- Points snapshot for connected user (live) ---
+            # We reuse the points calculation helper to get Volume Points
+            with closing(get_conn()) as conn:
+                txp_pts = pd.read_sql_query("""
+                    SELECT t.ts as Time, u.id as user_id, u.username as User, t.action as Action,
+                        t.token as Outcome, t.qty as Quantity,
+                        t.buy_delta as BuyAmt_Delta, t.sell_delta as SellAmt_Delta
+                    FROM transactions t JOIN users u ON t.user_id=u.id
+                    ORDER BY t.ts ASC
+                """, conn)
+                users_df_pts = pd.read_sql_query("SELECT id, username FROM users ORDER BY id", conn)
+
+            my_vol_points = 0.0
+            if not txp_pts.empty:
+                points_live = compute_user_points(txp_pts, users_df_pts)
+                me_row = points_live[points_live["user_id"] == st.session_state["user_id"]]
+                if not me_row.empty:
+                    my_vol_points = float(me_row["VolumePoints"].iloc[0])
+
+            # PnL points use *current* portfolio snapshot in the account card
+            my_pnl_now = max(portfolio_value - STARTING_BALANCE, 0.0)
+            my_pnl_points = my_pnl_now * PNL_POINTS_PER_USD
+
+            my_total_points = my_vol_points + my_pnl_points
+
+            # Per-token breakdown
+            with overall_cols[1]:
+                with st.container(border=True):
+                    st.subheader("Points")
+                    # Display row
+                    pcols = st.columns(3)
+                    with pcols[0]:
+                        st.metric("Volume Points", f"{my_vol_points:,.0f}")
+                    with pcols[1]:
+                        st.metric("PnL Points", f"{my_pnl_points:,.0f}")
+                    with pcols[2]:
+                        st.metric("Total Points", f"{my_total_points:,.0f}")
+
 
         # Per-token breakdown
-        br_cols = st.columns(3)
-        for i, token in enumerate(TOKENS):
-            shares = user_holdings.get(token, 0)
-            price = prices[token]
-            val = holding_values[token]
-            with br_cols[i]:
-                st.caption(f"Outcome :blue[{token}]")
-                st.text(f"Shares: {shares}")
-                st.text(f"Price: {price:.4f}")
-                st.text(f"Value: ${val:,.2f}")
+        with st.container(border=True):
+            st.subheader("Share Holdings")
+            br_cols = st.columns(3)
+            for i, token in enumerate(TOKENS):
+                shares = user_holdings.get(token, 0)
+                price = prices[token]
+                val = holding_values[token]
+                with br_cols[i]:
+                    st.caption(f"Outcome :blue[{token}]")
+                    st.text(f"Shares: {shares}")
+                    st.text(f"Price: {price:.4f}")
+                    st.text(f"Value: ${val:,.2f}")
 
 # === Cost basis & per-token PnL table ===
 user_id = st.session_state.get("user_id")
@@ -616,6 +999,9 @@ if user_id is not None:
 
     st.markdown("**Per-Token Position & PnL**")
     st.dataframe(pnl_df, use_container_width=True)
+    st.divider()
+
+    
 
 # Common Trading UI
 input_mode = st.radio("Select Input Mode", ["Quantity", "USDC"], horizontal=True)
@@ -853,8 +1239,10 @@ if not tx.empty:
             'Time': pd.to_datetime(r['Time']), 'Outcome': tkn, 'Payout/Share': payout
         })
     ps_df = pd.DataFrame(shares_timeline)
-    fig = px.line(ps_df, x="Time", y="Payout/Share", color="Outcome", markers=True, title="Payout/Share Over Time")
-    st.plotly_chart(fig, use_container_width=True)
+    fig = px.line(ps_df, x="Time", y="Payout/Share", color="Outcome", markers=True,
+              title="Payout/Share Over Time")
+    st.plotly_chart(fig, use_container_width=True, key="chart_payout_share")
+    # st.plotly_chart(fig, use_container_width=True)
     st.divider()
 
     # Hide for now
@@ -875,28 +1263,78 @@ if not tx.empty:
     # st.plotly_chart(fig_stack, use_container_width=True)
 
 # ===========================================================
-# Bonding Curves by Outcome with pointers
-st.subheader("🔁 Bonding Curves by Outcome")
-tabs = st.tabs(TOKENS) # Change tab
-x_vals = list(range(1, MAX_SHARES))
-buy_vals = [buy_curve(x) for x in x_vals]
-sell_vals = [sell_curve(x) for x in x_vals]
 
+import numpy as np
+import plotly.graph_objects as go
+# --- smart sampler: dense around reserve, sparse elsewhere ---
+def _curve_samples(max_shares: int, reserve: int, dense_pts: int = 1500, sparse_pts: int = 600) -> np.ndarray:
+    if max_shares <= 1:
+        return np.array([1], dtype=int)
+
+    # Dense window = ±3% of domain (capped at ±50k)
+    half = min(int(0.03 * max_shares), 50_000)
+    lo = max(1, reserve - half)
+    hi = min(max_shares, reserve + half)
+
+    dense = np.linspace(lo, hi, num=max(2, dense_pts), dtype=int)
+
+    left = np.array([], dtype=int)
+    if lo > 1:
+        left = np.unique(np.logspace(0, np.log10(lo), num=max(2, sparse_pts // 2), base=10.0)).astype(int)
+        left = left[(left >= 1) & (left < lo)]
+
+    right = np.array([], dtype=int)
+    if hi < max_shares:
+        right = np.unique(np.logspace(np.log10(hi + 1), np.log10(max_shares), num=max(2, sparse_pts // 2), base=10.0)).astype(int)
+        right = right[(right > hi) & (right <= max_shares)]
+
+    xs = np.unique(np.concatenate([left, dense, right]))
+    return xs
+
+# Vectorized curve evals
+def buy_curve_np(x: np.ndarray) -> np.ndarray:
+    # y = cbrt(x)/1000 + 0.1
+    return np.cbrt(x) / 1000.0 + 0.1
+
+def sell_curve_np(x: np.ndarray) -> np.ndarray:
+    # y = 1 / (4 * (0.8 + exp(-(x-500k)/1e6))) - 0.05
+    t = (x.astype(np.float64) - 500_000.0) / 1_000_000.0
+    return 1.0 / (4.0 * (0.8 + np.exp(-t))) - 0.05
+
+# Cache the heavy sampling+eval by (MAX_SHARES, reserve)
+@st.cache_data(show_spinner=False)
+def get_curve_series(max_shares: int, reserve: int, dense_pts: int = 1500, sparse_pts: int = 600):
+    xs = _curve_samples(max_shares, reserve, dense_pts=dense_pts, sparse_pts=sparse_pts)
+    return xs, buy_curve_np(xs), sell_curve_np(xs)
+
+
+# # --- Bonding Curves by Outcome (optimized) ---
+st.subheader("🔁 Bonding Curves by Outcome")
+tabs = st.tabs(TOKENS)
+
+# get latest reserves once
 with closing(get_conn()) as conn:
-    latest_reserves = {r["token"]: r["shares"] for r in conn.execute("SELECT token, shares FROM reserves").fetchall()}
+    latest_reserves = {r["token"]: int(r["shares"]) for r in conn.execute(
+        "SELECT token, shares FROM reserves"
+    ).fetchall()}
 
 for token, tab in zip(TOKENS, tabs):
     reserve = int(latest_reserves.get(token, 0))
-    buy_price_now = buy_curve(reserve)
-    sell_price_now = sell_curve(reserve)
+
+    # point annotations at the *exact* reserve using your scalar functions
+    buy_price_now = float(buy_curve(reserve))
+    sell_price_now = float(sell_curve(reserve))
+
+    # smart-sampled, cached series around this reserve
+    xs, buy_vals, sell_vals = get_curve_series(MAX_SHARES, reserve)
 
     fig_curve = go.Figure()
-    fig_curve.add_trace(go.Scatter(
-        x=x_vals, y=buy_vals, mode='lines', name='Buy Curve', line=dict(color='green')
-    ))
-    fig_curve.add_trace(go.Scatter(
-        x=x_vals, y=sell_vals, mode='lines', name='Sell Curve', line=dict(color='red')
-    ))
+    fig_curve.add_trace(go.Scattergl(
+        x=xs, y=buy_vals, mode='lines', name='Buy Curve', line=dict(color='green'
+    )))
+    fig_curve.add_trace(go.Scattergl(
+        x=xs, y=sell_vals, mode='lines', name='Sell Curve', line=dict(color='red'
+    )))
 
     # Buy point annotation
     fig_curve.add_trace(go.Scatter(
@@ -918,37 +1356,147 @@ for token, tab in zip(TOKENS, tabs):
         showlegend=False
     ))
 
-    # Dashed helper lines
+    # Dashed helper lines (use max with 0 to avoid negative bottoms in view)
+    y0_buy = max(0.0, min(buy_vals.min(), sell_vals.min(), buy_price_now, sell_price_now))
     fig_curve.add_trace(go.Scatter(
-        x=[reserve, reserve], y=[0, buy_price_now], mode='lines',
-        line=dict(color='green', dash='dot'), showlegend=False
-    ))
+            x=[reserve, reserve], y=[y0_buy, buy_price_now], mode='lines',
+            line=dict(dash='dot'), showlegend=False
+        ))
     fig_curve.add_trace(go.Scatter(
-        x=[0, reserve], y=[buy_price_now, buy_price_now], mode='lines',
-        line=dict(color='green', dash='dot'), showlegend=False
-    ))
+            x=[xs.min(), reserve], y=[buy_price_now, buy_price_now], mode='lines',
+            line=dict(dash='dot'), showlegend=False
+        ))
     fig_curve.add_trace(go.Scatter(
-        x=[reserve, reserve], y=[0, sell_price_now], mode='lines',
-        line=dict(color='red', dash='dot'), showlegend=False
-    ))
+            x=[reserve, reserve], y=[y0_buy, sell_price_now], mode='lines',
+            line=dict(dash='dot'), showlegend=False
+        ))
     fig_curve.add_trace(go.Scatter(
-        x=[0, reserve], y=[sell_price_now, sell_price_now], mode='lines',
-        line=dict(color='red', dash='dot'), showlegend=False
-    ))
+            x=[xs.min(), reserve], y=[sell_price_now, sell_price_now], mode='lines',
+            line=dict(dash='dot'), showlegend=False
+        ))
 
     fig_curve.update_layout(
         title=f'{token} Price vs Shares',
         xaxis_title='Shares',
         yaxis_title='Price',
-        hovermode="x unified"
+        hovermode="x unified",
+        # uirevision="curves",  # keeps view on widget changes
+        # legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
     )
 
-    tab.plotly_chart(fig_curve, use_container_width=True)
+    tab.plotly_chart(fig_curve, use_container_width=True, key=f"chart_curve_{token}")
+
 
 st.divider()
+
+# ===========================================================
+
+
+# Always fetch tx + users once
+with closing(get_conn()) as conn:
+    txp = pd.read_sql_query("""
+        SELECT t.ts as Time, u.id as user_id, u.username as User, t.action as Action,
+               t.token as Outcome, t.qty as Quantity, t.buy_delta as BuyAmt_Delta,
+               t.sell_delta as SellAmt_Delta
+        FROM transactions t JOIN users u ON t.user_id=u.id
+        ORDER BY t.ts ASC
+    """, conn)
+    users_df = pd.read_sql_query("SELECT id, username FROM users ORDER BY id", conn)
+
+if txp.empty:
+    st.info("No transactions yet to compute history.")
+else:
+    # Historical charts: toggle between Portfolio Value and Points
+    st.subheader("📊 History")
+
+    # Tabs for Portfolio vs Points
+    tab1, tab2 = st.tabs(["💼 Portfolio Value", "⭐ Points"])
+    txp["Time"] = pd.to_datetime(txp["Time"])
+
+    with tab1:
+        # ---- Portfolio chart (with pricing mode) ----
+        price_mode = st.radio("Value holdings at:", ["Buy Price", "Mid Price", "Sell Price"], horizontal=True)
+
+        # Reconstruct state over time (same as your current logic)
+        reserves_state = {t: 0 for t in TOKENS}
+        user_state = {
+            int(r.id): {"username": r.username, "balance": STARTING_BALANCE, "holdings": {t: 0 for t in TOKENS}}
+            for _, r in users_df.iterrows()
+        }
+        records = []
+
+        for _, r in txp.iterrows():
+            uid = int(r["user_id"])
+            act = r["Action"]
+            tkn = r["Outcome"]
+            qty = int(r["Quantity"])
+
+            if act == "Buy":
+                delta = float(r["BuyAmt_Delta"] or 0.0)
+                user_state[uid]["balance"] -= delta
+                user_state[uid]["holdings"][tkn] += qty
+                reserves_state[tkn] += qty
+
+            elif act == "Sell":
+                delta = float(r["SellAmt_Delta"] or 0.0)
+                user_state[uid]["balance"] += delta
+                user_state[uid]["holdings"][tkn] -= qty
+                reserves_state[tkn] -= qty
+
+            elif act == "Resolve":
+                payout = float(r["SellAmt_Delta"] or 0.0)
+                user_state[uid]["balance"] += payout
+                for u_id in user_state:
+                    user_state[u_id]["holdings"] = {t: 0 for t in TOKENS}
+                reserves_state = {t: 0 for t in TOKENS}
+
+            # Pricing snapshot
+            if act == "Resolve":
+                prices = {t: 0.0 for t in TOKENS}
+            else:
+                if price_mode == "Buy Price":
+                    prices = {t: buy_curve(reserves_state[t]) for t in TOKENS}
+                elif price_mode == "Sell Price":
+                    prices = {t: sell_curve(reserves_state[t]) for t in TOKENS}
+                else:
+                    prices = {t: buy_curve(reserves_state[t]) - sell_curve(reserves_state[t]) for t in TOKENS}
+
+            # Snapshot every user at this event time
+            for u_id, s in user_state.items():
+                pv = s["balance"] + sum(s["holdings"][t] * prices[t] for t in TOKENS)
+                pnl = pv - STARTING_BALANCE
+                records.append({"Time": r["Time"], "User": s["username"], "PortfolioValue": pv, "PnL": pnl})
+
+        port_df = pd.DataFrame(records)
+        fig_port = px.line(
+            port_df, x="Time", y="PortfolioValue", color="User",
+            title=f"Portfolio Value Over Time ({price_mode})"
+        )
+        st.plotly_chart(fig_port, use_container_width=True, key="portfolio_value_chart")
+
+    with tab2:
+        # ---- Points chart ----
+        points_tl = compute_points_timeline(txp, users_df)
+
+        if points_tl.empty:
+            st.info("No points history to display yet.")
+        else:
+            # (Optional) keep leaderboard consistency by excluding admin
+            points_plot_df = points_tl[points_tl["User"].str.lower() != "admin"].copy()
+
+            fig_pts = px.line(
+                points_plot_df,
+                x="Time",
+                y="TotalPoints",
+                color="User",
+                title="Total Points Over Time (Cumulative Volume + Instant PnL Points)",
+                line_group="User",
+            )
+            st.plotly_chart(fig_pts, use_container_width=True, key='points_chart')
+
  # ===========================================================
 # Historical portfolio visualization (toggle between buy and sell price)
-price_mode = st.radio("Value holdings at:", ["Buy Price", "Mid Price", "Sell Price"], horizontal=True)
+
 with closing(get_conn()) as conn:
     txp = pd.read_sql_query("""
         SELECT t.ts as Time, u.id as user_id, u.username as User, t.action as Action,
@@ -1015,28 +1563,41 @@ if not txp.empty:
             pnl = pv - STARTING_BALANCE
             records.append({"Time": r["Time"], "User": s["username"], "PortfolioValue": pv, "PnL": pnl})
 
-    port_df = pd.DataFrame(records)
-    fig_port = px.line(
-        port_df, x="Time", y="PortfolioValue", color="User",
-        title=f"Portfolio Value Over Time ({price_mode})"
-    )
-    st.subheader("💼 Portfolio Value History")
-    st.plotly_chart(fig_port, use_container_width=True)
-
-    # Leaderboard (final snapshot after last event)
     st.divider()
-    st.subheader("🏆 Leaderboard (Portfolio & PnL)")
+    st.subheader("🏆 Leaderboard (Portfolio, PnL & Points)")
+
+    # Latest portfolio snapshot per user
     latest = (
         port_df.sort_values("Time")
         .groupby("User", as_index=False)
         .last()[["User", "PortfolioValue", "PnL"]]
     )
-        # Exclude admin from leaderboard
+
+    # Exclude admin
     latest = latest[latest["User"].str.lower() != "admin"]
     latest["PnL"] = latest["PortfolioValue"] - STARTING_BALANCE
+
+    # === Compute points ===
+    # 1) Volume points from transaction stream with phase multipliers
+    points_vol = compute_user_points(txp, users_df)  # txp & users_df already computed above
+
+    # 2) PnL points: only for positive PnL
+    pnl_points = latest[["User", "PnL"]].copy()
+    pnl_points["PnLPoints"] = pnl_points["PnL"].clip(lower=0.0) * PNL_POINTS_PER_USD
+    pnl_points = pnl_points[["User", "PnLPoints"]]
+
+    # 3) Merge points
+    pts = points_vol.merge(pnl_points, on="User", how="left")
+    pts["PnLPoints"] = pts["PnLPoints"].fillna(0.0)
+    pts["TotalPoints"] = pts["VolumePoints"] + pts["PnLPoints"]
+
+    # 4) Merge points into leaderboard
+    latest = latest.merge(pts[["User", "VolumePoints", "PnLPoints", "TotalPoints"]], on="User", how="left")
+    latest[["VolumePoints", "PnLPoints", "TotalPoints"]] = latest[["VolumePoints", "PnLPoints", "TotalPoints"]].fillna(0.0)
+
+    # Sort leaderboard however you like; keep by PnL for now
     latest = latest.sort_values("PnL", ascending=False)
 
-    # check if zero filter
     if latest.empty:
         st.info("No eligible users to display yet.")
     else:
@@ -1050,7 +1611,13 @@ if not txp.empty:
                     delta=delta_val,
                     border=True
                 )
+                # Optional: mini points callout
+                st.caption(f"Points: {row['TotalPoints']:,.0f}")
 
-        st.dataframe(latest[["User", "PortfolioValue", "PnL"]], use_container_width=True)
+        st.dataframe(
+            latest[["User", "PortfolioValue", "PnL", "VolumePoints", "PnLPoints", "TotalPoints"]],
+            use_container_width=True
+        )
+
 else:
     st.info("No transactions yet to compute portfolio history.")
