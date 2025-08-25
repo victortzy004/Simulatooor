@@ -35,8 +35,8 @@ TOKENS = ["YES", "NO"]
 WHITELIST = {"admin", "rui", "haoye", "leo", "steve", "wenbo", "sam", "sharmaine", "mariam", "henry", "guard", "victor", "toby"}
 
 # Inflection Points
-EARLY_QUANTITY_POINT = 270
-MID_QUANTITY_POINT = 630
+EARLY_QUANTITY_POINT = 5000000
+MID_QUANTITY_POINT = 15000000
 
 # ==== Points System (tunable) ====
 TRADE_POINTS_PER_USD = 10.0   # Buy & Sell volume → 10 pts per $1 traded
@@ -490,12 +490,12 @@ init_db()
 ensure_market_resolution_columns()
 
 
-
+# To-check:
 @st.cache_data(show_spinner=False)
 def cached_curve_samples(max_shares:int, reserve:int):
     xs = _curve_samples(max_shares, reserve)
     return xs, buy_curve_np(xs), sell_curve_np(xs)
-
+# To-check:
 @st.cache_data(show_spinner=False)
 def load_tx_and_users(cache_key:int):
     with closing(get_conn()) as conn:
