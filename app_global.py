@@ -17,7 +17,7 @@ BASE_EPSILON = 1e-4
 MARKET_DURATION_DAYS = 5
 END_TS = "2025-08-29 00:00"
 DB_PATH = "app.db"
-MAX_SHARES = 500000 #10M
+MAX_SHARES = 5000000 #10M
 STARTING_BALANCE = 50000.0 #50k
 MARKET_QUESTION = "Will the total crypto market cap be larger than NVIDIA's market cap by the 29th Aug?"
 
