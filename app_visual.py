@@ -11,8 +11,9 @@ import numpy as np
 # Constants
 BASE_EPSILON = 1e-4
 OUTCOMES = ['A', 'B', 'C']
-MAX_SHARES = 4000
+MAX_SHARES = 5000000 # 5M
 
+SHARE_DISPLAY_OPTIONS = [50000, 100000, 250000, 500000, 1000000]
 APP_MODES = ["Curve Viewer", "Simulator"]
 
 # ===========================================================
@@ -32,60 +33,228 @@ def baseline_buy_delta(x):      # integral of baseline_buy_curve (your current)
 def baseline_sell_delta(x):     # integral of baseline_sell_curve (your current)
     return 1.93333 * x + 0.00166667 * x**2 + 2 * math.sqrt(301200 - 1000 * x + x**2)
 
-# #2 Model: Baseline
-# Example alt set 1: smoother convex buy, piecewise sell (edit freely)
-def alt1_buy_curve(x):
-    return 0.02 * np.sqrt(x + 1) + (x / 500)
 
-def alt1_sell_curve(x):
-    # gentle slope at start, steeper later
-    return 0.015 * x + 0.00015 * (x**2) / (1 + 0.0005 * x)
+# #1 Model: Baseline
+def secondary_buy_curve(x):      # your current model
+    return (x**(1/3)/1000) + 0.1
 
-def alt1_buy_delta(x):
-    # ∫ alt1_buy_curve dx
-    return 0.02 * (2/3) * (x + 1)**(3/2) + (x**2) / 1000
+def secondary_buy_delta(x):
+    return (3.0/4000.0) * (x**(4.0/3.0)) + x/10.0
+# # #2 Model: Baseline
+# # Example alt set 1: smoother convex buy, piecewise sell (edit freely)
+# def alt1_buy_curve(x):
+#     return 0.02 * np.sqrt(x + 1) + (x / 500)
 
-def alt1_sell_delta(x):
-    # primitive of alt1_sell_curve (approx closed form for demo)
-    return 0.015 * x**2 / 2 + 0.00015 * (x**3) / (3 + 0.0015 * x)  # simple smooth approx
+# def alt1_sell_curve(x):
+#     # gentle slope at start, steeper later
+#     return 0.015 * x + 0.00015 * (x**2) / (1 + 0.0005 * x)
 
-# #3 Model: Baseline
-# Example alt set 2: linear buy, cubic-ish sell (edit freely)
-def alt2_buy_curve(x):
-    return 0.03 * x + 2.5
+# def alt1_buy_delta(x):
+#     # ∫ alt1_buy_curve dx
+#     return 0.02 * (2/3) * (x + 1)**(3/2) + (x**2) / 1000
 
-def alt2_sell_curve(x):
-    return 2.2 + 0.02 * x + 1e-6 * x**3
+# def alt1_sell_delta(x):
+#     # primitive of alt1_sell_curve (approx closed form for demo)
+#     return 0.015 * x**2 / 2 + 0.00015 * (x**3) / (3 + 0.0015 * x)  # simple smooth approx
 
-def alt2_buy_delta(x):
-    return 0.03 * x**2 / 2 + 2.5 * x
+# # #3 Model: Baseline
+# # Example alt set 2: linear buy, cubic-ish sell (edit freely)
+# def alt2_buy_curve(x):
+#     return 0.03 * x + 2.5
 
-def alt2_sell_delta(x):
-    return 2.2 * x + 0.02 * x**2 / 2 + 1e-6 * x**4 / 4
+# def alt2_sell_curve(x):
+#     return 2.2 + 0.02 * x + 1e-6 * x**3
+
+# def alt2_buy_delta(x):
+#     return 0.03 * x**2 / 2 + 2.5 * x
+
+# def alt2_sell_delta(x):
+#     return 2.2 * x + 0.02 * x**2 / 2 + 1e-6 * x**4 / 4
+
+
+# ---------- [DEPRECATED] Variants ----------
+# def sell_curve_1(x: float) -> float:
+#     """y = (x-100000)/(40000*sqrt(10000 + ((x-100000)/10000)^2)) + (x-100000)/800000000"""
+#     dx = x - 100000.0
+#     return dx / (40000.0 * math.sqrt(10000.0 + (dx/10000.0)**2)) + dx / 800000000.0
+
+# def sell_delta_1(x: float) -> float:
+#     """∫ y dx = x^2/1_600_000_000 + x/8000 + sqrt((x-100000)^2 + 1e12)/4  (up to +C)"""
+#     dx = x - 100000.0
+#     return (x**2) / 1_600_000_000.0 + x / 8000.0 + math.sqrt(dx*dx + 1_000_000_000_000.0) / 4.0
+
+
+# def sell_curve_2(x: float) -> float:
+#     """y = (x-100000)/(20000*sqrt(20000 + ((x-100000)/4000)^2)) + (x-100000)/400000000"""
+#     dx = x - 100000.0
+#     return dx / (20000.0 * math.sqrt(20000.0 + (dx/4000.0)**2)) + dx / 400_000_000.0
+
+# def sell_delta_2(x: float) -> float:
+#     """∫ y dx = x^2/800_000_000 + x/4000 + sqrt((x-100000)^2 + 3.2e11)/5  (up to +C)"""
+#     dx = x - 100000.0
+#     return (x**2) / 800_000_000.0 + x / 4000.0 + math.sqrt(dx*dx + 320_000_000_000.0) / 5.0
+
+
+# def sell_curve_3(x: float) -> float:
+#     """y = (x-100000)/(20000*sqrt(50000 + ((x-100000)/2000)^2)) + (x-100000)/400000000 + 0.1"""
+#     dx = x - 100000.0
+#     return dx / (20000.0 * math.sqrt(50000.0 + (dx/2000.0)**2)) + dx / 400_000_000.0 + 0.1
+
+# def sell_delta_3(x: float) -> float:
+#     """∫ y dx = x^2/800_000_000 + 0.09975*x + sqrt((x-100000)^2 + 2e11)/10  (up to +C)"""
+#     dx = x - 100000.0
+#     return (x**2) / 800_000_000.0 + 0.09975 * x + math.sqrt(dx*dx + 200_000_000_000.0) / 10.0
+
+
+# =========================
+# NumPy (vectorized) versions
+# =========================
+def _cbrt(x):
+    # vectorized real cube root
+    x = np.asarray(x, dtype=float)
+    return np.cbrt(x)
+
+# ---- FLAT MODE ----
+def flat_buy_curve_np(x):
+    return _cbrt(x) / 1000.0 + 0.1
+
+def flat_buy_delta_np(x, C: float = 0.0):
+    x = np.asarray(x, dtype=float)
+    return (3.0/4000.0) * (np.abs(x) ** (4.0/3.0)) + 0.1 * x + C
+
+def flat_sell_curve_np(x):
+    x = np.asarray(x, dtype=float)
+    t = (x - 500_000.0) / 1_000_000.0
+    return 1.0 / (4.0 * (0.8 + np.exp(-t))) - 0.05
+
+def flat_sell_delta_np(x, C: float = 0.0):
+    x = np.asarray(x, dtype=float)
+    t = (x - 500_000.0) / 1_000_000.0
+    return 312_500.0 * np.log1p(0.8 * np.exp(t)) - 0.05 * x + C
+
+
+# ---- STEEP MODE ----
+def steep_buy_curve_np(x):
+    x = np.asarray(x, dtype=float)
+    return np.sqrt(np.maximum(0.0, x)) / 5000.0 + 0.01
+
+def steep_buy_delta_np(x, C: float = 0.0):
+    x = np.asarray(x, dtype=float)
+    return (2.0/15000.0) * (np.maximum(0.0, x) ** 1.5) + 0.01 * x + C
+
+def steep_sell_curve_np(x):
+    x = np.asarray(x, dtype=float)
+    t = (x - 500_000.0) / 1_000_000.0
+    return 1.0 / (6.0 * (0.4 + np.exp(-t))) - 0.08 + x / 80_000_000.0
+
+def steep_sell_delta_np(x, C: float = 0.0):
+    x = np.asarray(x, dtype=float)
+    t = (x - 500_000.0) / 1_000_000.0
+    return (1_250_000.0/3.0) * np.log1p(0.4 * np.exp(t)) - 0.08 * x + (x**2) / 160_000_000.0 + C
+
+
+# ---- MEDIUM MODE ----
+def medium_buy_curve_np(x):
+    x = np.asarray(x, dtype=float)
+    return (np.maximum(0.0, x) ** (4.0/9.0)) / 3000.0 + 0.05
+
+def medium_buy_delta_np(x, C: float = 0.0):
+    x = np.asarray(x, dtype=float)
+    return (3.0/13000.0) * (np.maximum(0.0, x) ** (13.0/9.0)) + 0.05 * x + C
+
+def medium_sell_curve_np(x):
+    x = np.asarray(x, dtype=float)
+    t = (x - 500_000.0) / 1_000_000.0
+    return 1.0 / (5.0 * (0.6 + np.exp(-t))) - 0.06 + x / 150_000_000.0
+
+def medium_sell_delta_np(x, C: float = 0.0):
+    x = np.asarray(x, dtype=float)
+    t = (x - 500_000.0) / 1_000_000.0
+    return (1_000_000.0/3.0) * np.log1p(0.6 * np.exp(t)) - 0.06 * x + (x**2) / 300_000_000.0 + C
+
+
 
 CURVE_SETS = {
-    "Baseline (current)": {
+    "Baseline (Simulatoor default)": {
         "buy_curve": baseline_buy_curve,
         "sell_curve": baseline_sell_curve,
         "buy_delta": baseline_buy_delta,
         "sell_delta": baseline_sell_delta,
-        "max_shares": 10000,    # per-set override if you like
+        "max_shares": 1000000,    # per-set override if you like
     },
-    "Alt 1 (smooth convex buy)": {
-        "buy_curve": alt1_buy_curve,
-        "sell_curve": alt1_sell_curve,
-        "buy_delta": alt1_buy_delta,
-        "sell_delta": alt1_sell_delta,
-        "max_shares": 10000,
-    },
-    "Alt 2 (linear buy, cubic sell)": {
-        "buy_curve": alt2_buy_curve,
-        "sell_curve": alt2_sell_curve,
-        "buy_delta": alt2_buy_delta,
-        "sell_delta": alt2_sell_delta,
-        "max_shares": 10000,
-    },
+    # "Updated (redeem v1)": {
+    #     "buy_curve": secondary_buy_curve,
+    #     "sell_curve": sell_curve_1,
+    #     "buy_delta": secondary_buy_delta,
+    #     "sell_delta": sell_delta_1,
+    #     "max_shares": MAX_SHARES,
+    # },
+    # "Updated (redeem v2)": {
+    #     "buy_curve": secondary_buy_curve,
+    #     "sell_curve": sell_curve_2,
+    #     "buy_delta": secondary_buy_delta,
+    #     "sell_delta": sell_delta_2,
+    #     "max_shares": MAX_SHARES,
+    # },
+    # "Updated (redeem v3)": {
+    #     "buy_curve": secondary_buy_curve,
+    #     "sell_curve": sell_curve_3,
+    #     "buy_delta": secondary_buy_delta,
+    #     "sell_delta": sell_delta_3,
+    #     "max_shares": MAX_SHARES,
+    # },
+     "Flat":   {"buy_curve": flat_buy_curve_np,   "buy_delta": flat_buy_delta_np,
+               "sell_curve": flat_sell_curve_np, "sell_delta": flat_sell_delta_np, "max_shares": MAX_SHARES},
+    "Steep":  {"buy_curve": steep_buy_curve_np,  "buy_delta": steep_buy_delta_np,
+               "sell_curve": steep_sell_curve_np,"sell_delta": steep_sell_delta_np,"max_shares": MAX_SHARES},
+    "Medium": {"buy_curve": medium_buy_curve_np, "buy_delta": medium_buy_delta_np,
+               "sell_curve": medium_sell_curve_np,"sell_delta": medium_sell_delta_np,"max_shares": MAX_SHARES},
 }
+
+
+# Default existing simulator curve
+SIMULATOR_BUY_CURVE = flat_buy_curve_np
+SIMULATOR_BUY_DELTA = flat_buy_delta_np
+SIMULATOR_SELL_CURVE = flat_sell_curve_np
+SIMULATOR_SELL_DELTA = flat_sell_delta_np
+
+# Search Functions
+def qty_from_buy_usdc(reserve: int, usd: float) -> int:
+    if usd <= 0:
+        return 0
+    # initial guess: linear approximation
+    q = usd / max(SIMULATOR_BUY_CURVE(reserve), 1e-9)
+    q = max(0.0, min(q, MAX_SHARES - reserve))
+
+    for _ in range(12):
+        f  = (SIMULATOR_BUY_DELTA(reserve + q) - SIMULATOR_BUY_DELTA(reserve)) - usd
+        fp = max(SIMULATOR_BUY_CURVE(reserve + q), 1e-9)  # df/dq
+        step = f / fp
+        q -= step
+        # clamp
+        if q < 0.0: q = 0.0
+        if q > (MAX_SHARES - reserve): q = float(MAX_SHARES - reserve)
+        if abs(step) < 1e-6:
+            break
+    return int(q)
+
+def qty_from_sell_usdc(reserve: int, usd: float) -> int:
+    if usd <= 0:
+        return 0
+    # initial guess: linear approx using current sell price
+    q = usd / max(SIMULATOR_SELL_CURVE(reserve), 1e-9)
+    q = max(0.0, min(q, float(reserve)))
+
+    for _ in range(12):
+        f  = (SIMULATOR_SELL_DELTA(reserve) - SIMULATOR_SELL_CURVE(reserve - q)) - usd
+        fp = max(SIMULATOR_SELL_CURVE(reserve - q), 1e-9)  # df/dq = price at (reserve - q)
+        step = f / fp
+        q -= step
+        if q < 0.0: q = 0.0
+        if q > reserve: q = float(reserve)
+        if abs(step) < 1e-6:
+            break
+    return int(q)
 
 # Configuration Init
 st.set_page_config(page_title="Bonding Curve Simulator", layout="wide")
@@ -115,7 +284,7 @@ with st.sidebar:
     if qty_mode == "Preset list":
         preset_qty = st.selectbox(
             "Preset share quantity (for charts)",
-            [100, 1000, 2500, 5000, 7500, 10000],
+            [10000, 25000, 50000, 100000, 250000, 5000000, 1000000],
             index=1
         )
 
@@ -154,8 +323,8 @@ with st.sidebar:
     if show_curve_labels:
         label_step = st.select_slider(
             "Label every N shares",
-            options=[50, 100, 250, 500, 1000, 2000],
-            value=500
+            options=SHARE_DISPLAY_OPTIONS,
+            value=SHARE_DISPLAY_OPTIONS[3]
         )
 
     st.subheader("Axes")
@@ -195,18 +364,72 @@ if 'usdc_reserve' not in st.session_state:
 # ---------- Shared helpers ----------
 def get_all_metrics(x, quantity):
     new_x = x + quantity
-    buy_price = buy_curve(new_x)
-    sell_price = sell_curve(x)
-    buy_amt_delta = buy_delta(new_x) - buy_delta(x)
-    sell_amt_delta = sell_delta(x) - sell_delta(x - quantity) if x - quantity >= 0 else 0
+    buy_price = SIMULATOR_BUY_CURVE(new_x)
+    sell_price = SIMULATOR_SELL_CURVE(x)
+    buy_amt_delta = SIMULATOR_BUY_DELTA(new_x) - SIMULATOR_BUY_DELTA(x)
+    sell_amt_delta = SIMULATOR_SELL_DELTA(x) - SIMULATOR_SELL_DELTA(x - quantity) if x - quantity >= 0 else 0
     return buy_price, sell_price, buy_amt_delta, sell_amt_delta
 
+
+# --- smart sampler: dense around reserve, sparse elsewhere ---
+def _curve_samples(max_shares: int, reserve: int, dense_pts: int = 1500, sparse_pts: int = 600) -> np.ndarray:
+    # 0-based domain (so q=0 works)
+    if max_shares <= 0:
+        return np.array([0], dtype=int)
+
+    # Dense window = ±3% of domain (capped at ±50k)
+    half = min(int(0.03 * max_shares), 50_000)
+    lo = max(0, reserve - half)
+    hi = min(max_shares, reserve + half)
+
+    dense = np.linspace(lo, hi, num=max(2, dense_pts), dtype=int)
+
+    left = np.array([], dtype=int)
+    if lo > 0:
+        # logspace from 1→lo (avoid log10(0)); include 0 manually after unique
+        left = np.unique(np.logspace(0, np.log10(max(1, lo)), num=max(2, sparse_pts // 2), base=10.0)).astype(int)
+        left = np.concatenate([np.array([0], dtype=int), left[left < lo]])
+
+    right = np.array([], dtype=int)
+    if hi < max_shares:
+        # logspace from hi+1 → max_shares
+        start = max(hi + 1, 1)  # avoid log10(0)
+        right = np.unique(np.logspace(np.log10(start), np.log10(max_shares), num=max(2, sparse_pts // 2), base=10.0)).astype(int)
+        right = right[(right > hi) & (right <= max_shares)]
+
+    xs = np.unique(np.concatenate([left, dense, right]))
+    return xs
+
+
+# --- robust vectorized evaluation (handles math- or numpy-based curve fns) ---
+def _eval_curve(fn, xs: np.ndarray) -> np.ndarray:
+    xs = np.asarray(xs, dtype=float)
+    try:
+        y = fn(xs)                       # if fn is numpy-aware
+        return np.asarray(y, dtype=float)
+    except Exception:
+        # scalar fallback
+        return np.fromiter((fn(float(v)) for v in xs), dtype=float, count=len(xs))
+
+
+# Cache the heavy sampling+eval by (curve_key, MAX_SHARES, reserve, x_lo, x_hi, dense/sparse)
+@st.cache_data(show_spinner=False)
+def get_curve_series(curve_key: str, max_shares: int, reserve: int, x_lo: int, x_hi: int,
+                     dense_pts: int = 1500, sparse_pts: int = 600):
+    xs_all = _curve_samples(max_shares, reserve, dense_pts=dense_pts, sparse_pts=sparse_pts)
+    # keep only what’s visible
+    mask = (xs_all >= x_lo) & (xs_all <= x_hi)
+    xs = xs_all[mask]
+    # use the *currently bound* active curves (from your CURVE_SETS selection)
+    ys_buy = _eval_curve(buy_curve, xs)
+    ys_sell = _eval_curve(sell_curve, xs)
+    return xs, ys_buy, ys_sell
+
+# Core Feature #1: Bonding curve visualisooor with different curves
 def render_curve_viewer():
     st.subheader("🔁 Bonding Curves Visualisation")
 
-    token_label = "Outcome"  # cosmetic label only
-
-        # Marker quantity: preset, custom, or live (A)
+    # Marker quantity: preset, custom, or live (A)
     if qty_mode == "Preset list":
         marker_reserve = int(preset_qty)
     elif qty_mode == "Custom amount":
@@ -214,29 +437,32 @@ def render_curve_viewer():
     else:  # Use live reserve (A)
         marker_reserve = int(st.session_state.get('reserve_A', 0))
 
-    # Build x-range (respect custom axis controls)
+    # Visible X-range for plotting (inclusive)
     if x_mode == "Custom":
-        x_vals = list(range(int(x_min), int(x_max)))  # [x_min, x_max)
+        x_lo, x_hi = int(x_min), int(x_max)
     else:
-        x_vals = list(range(0, MAX_SHARES))           # [0, MAX_SHARES)
+        x_lo, x_hi = 0, int(MAX_SHARES)
 
-    # Clamp marker into current visible range to avoid out-of-bounds labels
-    if x_vals:
-        marker_reserve = int(np.clip(marker_reserve, x_vals[0], x_vals[-1]))
-    else:
-        marker_reserve = 0
-        
-    # Curves
-    buy_vals = [buy_curve(x) for x in x_vals]
-    sell_vals = [sell_curve(x) for x in x_vals]
+    # Clamp marker into current visible range
+    marker_reserve = int(np.clip(marker_reserve, x_lo, x_hi))
 
-    
+    # Smart-sampled, cached series for the active curve *and* visible range
+    xs, ys_buy, ys_sell = get_curve_series(
+        curve_key=curve_choice,
+        max_shares=int(MAX_SHARES),
+        reserve=marker_reserve,
+        x_lo=x_lo, x_hi=x_hi,
+        dense_pts=1500, sparse_pts=600
+    )
+
+    # Prices at marker (use the active bound functions)
     pb = float(buy_curve(marker_reserve))
     ps = float(sell_curve(marker_reserve))
 
+    # Plot
     fig_curve = go.Figure()
-    fig_curve.add_trace(go.Scatter(x=x_vals, y=buy_vals, mode='lines', name='Buy Curve'))
-    fig_curve.add_trace(go.Scatter(x=x_vals, y=sell_vals, mode='lines', name='Sell Curve'))
+    fig_curve.add_trace(go.Scatter(x=xs, y=ys_buy, mode='lines', name='Buy Curve'))
+    fig_curve.add_trace(go.Scatter(x=xs, y=ys_sell, mode='lines', name='Sell Curve'))
 
     # Marker with compact text
     fig_curve.add_trace(go.Scatter(
@@ -254,44 +480,50 @@ def render_curve_viewer():
 
     # Crosshairs
     fig_curve.add_trace(go.Scatter(
-        x=[marker_reserve, marker_reserve], y=[0, pb],
+        x=[marker_reserve, marker_reserve], y=[min(ys_buy.min(), ys_sell.min(), 0), pb],
         mode='lines', line=dict(dash='dot'), showlegend=False
     ))
     fig_curve.add_trace(go.Scatter(
-        x=[0, marker_reserve], y=[pb, pb],
+        x=[x_lo, marker_reserve], y=[pb, pb],
         mode='lines', line=dict(dash='dot'), showlegend=False
     ))
     fig_curve.add_trace(go.Scatter(
-        x=[marker_reserve, marker_reserve], y=[0, ps],
+        x=[marker_reserve, marker_reserve], y=[min(ys_buy.min(), ys_sell.min(), 0), ps],
         mode='lines', line=dict(dash='dot'), showlegend=False
     ))
     fig_curve.add_trace(go.Scatter(
-        x=[0, marker_reserve], y=[ps, ps],
+        x=[x_lo, marker_reserve], y=[ps, ps],
         mode='lines', line=dict(dash='dot'), showlegend=False
     ))
 
-    # Optional inline labels
+    # Optional inline labels along the curves
     if show_curve_labels:
-        xs = list(range(int(x_vals[0]), int(x_vals[-1]) + 1, label_step))
+        label_xs = np.arange(x_lo, x_hi + 1, int(label_step))
+        label_buy = _eval_curve(buy_curve, label_xs)
+        label_sell = _eval_curve(sell_curve, label_xs)
         fig_curve.add_trace(go.Scatter(
-            x=xs, y=[buy_curve(x) for x in xs],
-            mode='markers+text', text=[f"{buy_curve(x):.2f}" for x in xs],
+            x=label_xs, y=label_buy,
+            mode='markers+text',
+            text=[f"{v:.2f}" for v in label_buy],
             textposition="top center", name="Buy labels", showlegend=False, marker=dict(size=5)
         ))
         fig_curve.add_trace(go.Scatter(
-            x=xs, y=[sell_curve(x) for x in xs],
-            mode='markers+text', text=[f"{sell_curve(x):.2f}" for x in xs],
+            x=label_xs, y=label_sell,
+            mode='markers+text',
+            text=[f"{v:.2f}" for v in label_sell],
             textposition="bottom center", name="Sell labels", showlegend=False, marker=dict(size=5)
         ))
 
     fig_curve.update_layout(
-        title=f'{token_label} Price vs Shares — {curve_choice}',
-        xaxis_title='Shares', yaxis_title='Price', hovermode='x unified'
+        title=f'Price vs Shares — {curve_choice}',
+        xaxis_title='Shares',
+        yaxis_title='Price',
+        hovermode='x unified'
     )
 
-    # Axes ranges if custom
+    # Axes ranges if custom (Y stays as-is unless you set custom)
     if x_mode == "Custom":
-        fig_curve.update_xaxes(range=[int(x_min), int(x_max)])
+        fig_curve.update_xaxes(range=[x_lo, x_hi])
     if y_mode == "Custom":
         fig_curve.update_yaxes(range=[float(y_min), float(y_max)])
 
@@ -312,10 +544,15 @@ def render_curve_viewer():
     m3.metric("Sell price", f"{ps:.2f}", border=True)
     m4.metric("Theoretical MCAP (∫ buy 0→q)", f"{mcap_0_to_q:,.2f}", border=True)
 
-    if use_preset_for_markers:
-        st.caption("Metrics computed at the preset quantity. Toggle in the sidebar to use live reserves instead.")
+    if qty_mode == "Preset list":
+        st.caption("Metrics computed at the preset quantity.")
+    elif qty_mode == "Custom amount":
+        st.caption("Metrics computed at the custom quantity slider value.")
+    else:
+        st.caption("Metrics computed at the live reserve of outcome A.")
 
 
+# Core Feature #2: Simulator with 3 Outcome Tokens
 def render_simulator():
     # --- Input UI ---
     input_mode = st.radio("Select Input Mode", ["Quantity", "USDC"], horizontal=True)
@@ -339,7 +576,7 @@ def render_simulator():
             with buy_col:
                 if st.button(f"Buy {token}"):
                     if input_mode == "USDC":
-                        quantity = find_quantity_for_usdc(reserve, usdc_input)
+                        quantity =qty_from_buy_usdc(reserve, usdc_input)
 
                     buy_price, _, buy_amt_delta, _ = get_all_metrics(reserve, quantity)
 
@@ -372,7 +609,7 @@ def render_simulator():
                     reserve = st.session_state[f'reserve_{token}']
 
                     if input_mode == "USDC":
-                        quantity = find_quantity_for_sell_usdc(reserve, usdc_input)
+                        quantity = qty_from_sell_usdc(reserve, usdc_input)
 
                     if reserve >= quantity:
                         _, sell_price, _, sell_amt_delta = get_all_metrics(reserve, quantity)
@@ -405,15 +642,17 @@ def render_simulator():
     if st.session_state.logs:
         df = pd.DataFrame(st.session_state.logs)
 
-        reserve_A = st.session_state['reserve_A']
-        reserve_B = st.session_state['reserve_B']
-        reserve_C = st.session_state['reserve_C']
-        total_market = reserve_A + reserve_B + reserve_C
+        outcome_reserves = {
+            t: int(st.session_state.get(f"reserve_{t}", 0))
+            for t in OUTCOMES  # OUTCOMES = ['A','B','C']
+        }
 
+
+        total_market = sum(outcome_reserves.values())
         odds = {
-            'A': round(1 / (reserve_A / total_market), 4) if reserve_A > 0 else '-',
-            'B': round(1 / (reserve_B / total_market), 4) if reserve_B > 0 else '-',
-            'C': round(1 / (reserve_C / total_market), 4) if reserve_C > 0 else '-',
+            t: (round(1 / (outcome_reserves[t] / total_market), 4)
+                if outcome_reserves[t] > 0 and total_market > 0 else '-')
+            for t in OUTCOMES
         }
 
         st.subheader("Overall Market Metrics")
@@ -427,7 +666,7 @@ def render_simulator():
                 st.subheader(f'Outcome {tkn}')
                 reserve = st.session_state[f'reserve_{tkn}']
                 mcap = round(st.session_state[f'usdc_reserve_{tkn}'], 2)
-                price = round(buy_curve(reserve), 2)
+                price = round(SIMULATOR_BUY_CURVE(reserve), 2)
 
                 sub_cols = st.columns(4)
                 with sub_cols[0]:
@@ -446,36 +685,196 @@ def render_simulator():
         st.subheader("Transaction Log")
         st.dataframe(df, use_container_width=True)
 
+
+        # Trend #1: Payout/Share Historical Visualisation
         st.subheader("📈 Payout/Share Trend")
         df_viz = df[df['Payout/Share'] != '-'].copy()
         df_viz['Payout/Share'] = pd.to_numeric(df_viz['Payout/Share'], errors='coerce')
         fig = px.line(df_viz, x="Time", y="Payout/Share", color="Outcome", markers=True, title="Payout/Share Over Time")
         st.plotly_chart(fig, use_container_width=True)
+        st.divider()
 
-        st.subheader("📊 Circulating Token Shares Over Time")
-        df_reserve = df[df['Action'].isin(['Buy', 'Sell'])].copy()
-        df_reserve['Time'] = pd.to_datetime(df_reserve['Time'])
 
-        # Reconstruct reserves over time
-        reserve_log = []
-        running_reserves = {'A': 0, 'B': 0, 'C': 0}
-        for _, row in df_reserve.iterrows():
-            tkn = row['Outcome']
-            qty = row['Quantity']
-            running_reserves[tkn] += qty if row['Action'] == 'Buy' else -qty
-            reserve_log.append({
-                'Time': row['Time'],
-                'Shares A': running_reserves['A'],
-                'Shares B': running_reserves['B'],
-                'Shares C': running_reserves['C']
-            })
+    #     # Trend #2: Bonding Curves by Outcome (optimized)
+    #     st.subheader("🔁 Bonding Curves by Outcome")
+    #     tabs = st.tabs(OUTCOMES)
 
-        df_reserve_reconstructed = pd.DataFrame(reserve_log)
-        df_reserve_melt = df_reserve_reconstructed.melt(id_vars='Time', var_name='Token', value_name='Reserve')
-        fig_stack = px.area(df_reserve_melt, x="Time", y="Reserve", color="Token", title="Token Shares vs. Time")
-        st.plotly_chart(fig_stack, use_container_width=True)
+    #     outcome_reserves = {
+    #         t: int(st.session_state.get(f"reserve_{t}", 0))
+    #         for t in OUTCOMES  # OUTCOMES = ['A','B','C']
+    #     }
+
+
+    #     for token, tab in zip(OUTCOMES, tabs):
+    #         reserve = int(outcome_reserves.get(token, 0))
+
+    #         # point annotations at the *exact* reserve using your scalar functions
+    #         buy_price_now = float(SIMULATOR_BUY_CURVE(reserve))
+    #         sell_price_now = float(SIMULATOR_SELL_CURVE(reserve))
+
+    #         # smart-sampled, cached series around this reserve
+    #         xs, buy_vals, sell_vals = get_curve_series(MAX_SHARES, reserve)
+
+    #         fig_curve = go.Figure()
+    #         fig_curve.add_trace(go.Scattergl(
+    #             x=xs, y=buy_vals, mode='lines', name='Buy Curve', line=dict(color='green'
+    #         )))
+    #         fig_curve.add_trace(go.Scattergl(
+    #             x=xs, y=sell_vals, mode='lines', name='Sell Curve', line=dict(color='red'
+    #         )))
+
+    #         # Buy point annotation
+    #         fig_curve.add_trace(go.Scatter(
+    #             x=[reserve], y=[buy_price_now], mode='markers+text',
+    #             name=f'{token} Buy Point',
+    #             text=[f"Shares: {reserve}<br>Price: {buy_price_now:.4f}"],
+    #             textposition="top right",
+    #             marker=dict(size=10, color='green'),
+    #             showlegend=False
+    #         ))
+
+    #         # Sell point annotation
+    #         fig_curve.add_trace(go.Scatter(
+    #             x=[reserve], y=[sell_price_now], mode='markers+text',
+    #             name=f'{token} Sell Point',
+    #             text=[f"Shares: {reserve}<br>Price: {sell_price_now:.4f}"],
+    #             textposition="bottom right",
+    #             marker=dict(size=10, color='red'),
+    #             showlegend=False
+    #         ))
+
+    #         # Dashed helper lines (use max with 0 to avoid negative bottoms in view)
+    #         y0_buy = max(0.0, min(buy_vals.min(), sell_vals.min(), buy_price_now, sell_price_now))
+    #         fig_curve.add_trace(go.Scatter(
+    #                 x=[reserve, reserve], y=[y0_buy, buy_price_now], mode='lines',
+    #                 line=dict(dash='dot'), showlegend=False
+    #             ))
+    #         fig_curve.add_trace(go.Scatter(
+    #                 x=[xs.min(), reserve], y=[buy_price_now, buy_price_now], mode='lines',
+    #                 line=dict(dash='dot'), showlegend=False
+    #             ))
+    #         fig_curve.add_trace(go.Scatter(
+    #                 x=[reserve, reserve], y=[y0_buy, sell_price_now], mode='lines',
+    #                 line=dict(dash='dot'), showlegend=False
+    #             ))
+    #         fig_curve.add_trace(go.Scatter(
+    #                 x=[xs.min(), reserve], y=[sell_price_now, sell_price_now], mode='lines',
+    #                 line=dict(dash='dot'), showlegend=False
+    #             ))
+
+    #         fig_curve.update_layout(
+    #             title=f'{token} Price vs Shares',
+    #             xaxis_title='Shares',
+    #             yaxis_title='Price',
+    #             hovermode="x unified",
+    #             # uirevision="curves",  # keeps view on widget changes
+    #             # legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+    #         )
+
+    #         tab.plotly_chart(fig_curve, use_container_width=True, key=f"chart_curve_{token}")
+    #     st.divider()
+
+    #     # Trend #3: Historical circulating token shares
+    #     st.subheader("📊 Circulating Token Shares Over Time")
+    #     df_reserve = df[df['Action'].isin(['Buy', 'Sell'])].copy()
+    #     df_reserve['Time'] = pd.to_datetime(df_reserve['Time'])
+
+    #     # Reconstruct reserves over time
+    #     reserve_log = []
+    #     running_reserves = {'A': 0, 'B': 0, 'C': 0}
+    #     for _, row in df_reserve.iterrows():
+    #         tkn = row['Outcome']
+    #         qty = row['Quantity']
+    #         running_reserves[tkn] += qty if row['Action'] == 'Buy' else -qty
+    #         reserve_log.append({
+    #             'Time': row['Time'],
+    #             'Shares A': running_reserves['A'],
+    #             'Shares B': running_reserves['B'],
+    #             'Shares C': running_reserves['C']
+    #         })
+
+    #     df_reserve_reconstructed = pd.DataFrame(reserve_log)
+    #     df_reserve_melt = df_reserve_reconstructed.melt(id_vars='Time', var_name='Token', value_name='Reserve')
+    #     fig_stack = px.area(df_reserve_melt, x="Time", y="Reserve", color="Token", title="Token Shares vs. Time")
+    #     st.plotly_chart(fig_stack, use_container_width=True)
+    # else:
+    #     st.info("No actions taken yet. Use the buttons above to add rows.")
+    # Trend #2: Bonding Curves by Outcome (optimized)
+    st.subheader("🔁 Bonding Curves by Outcome")
+    tabs = st.tabs(OUTCOMES)
+
+    # per-outcome reserves from session state
+    outcome_reserves = {t: int(st.session_state.get(f"reserve_{t}", 0)) for t in OUTCOMES}
+
+    # visible X range
+    if x_mode == "Custom":
+        x_lo, x_hi = int(x_min), int(x_max)
     else:
-        st.info("No actions taken yet. Use the buttons above to add rows.")
+        x_lo, x_hi = 0, int(MAX_SHARES)
+
+    for token, tab in zip(OUTCOMES, tabs):
+        reserve = outcome_reserves.get(token, 0)
+        reserve_clamped = int(np.clip(reserve, x_lo, x_hi))
+
+        # smart-sampled, cached series for THIS curve set & outcome
+        xs, buy_vals, sell_vals = get_curve_series(
+            curve_key=f"{curve_choice}:{token}",
+            max_shares=int(MAX_SHARES),
+            reserve=reserve_clamped,
+            x_lo=x_lo,
+            x_hi=x_hi,
+            dense_pts=1200,
+            sparse_pts=500,
+        )
+
+        # prices at the exact reserve using active curve funcs
+        pb = float(buy_curve(reserve))
+        ps = float(sell_curve(reserve))
+
+        # plot
+        fig_curve = go.Figure()
+        fig_curve.add_trace(go.Scattergl(x=xs, y=buy_vals, mode='lines', name='Buy Curve'))
+        fig_curve.add_trace(go.Scattergl(x=xs, y=sell_vals, mode='lines', name='Sell Curve'))
+
+        # marker annotations
+        fig_curve.add_trace(go.Scatter(
+            x=[reserve_clamped], y=[pb], mode='markers+text', name='Buy Point',
+            text=[f"Shares: {reserve}<br>Price: {pb:.4f}"], textposition="top right",
+            marker=dict(size=10), showlegend=False
+        ))
+        fig_curve.add_trace(go.Scatter(
+            x=[reserve_clamped], y=[ps], mode='markers+text', name='Sell Point',
+            text=[f"Shares: {reserve}<br>Price: {ps:.4f}"], textposition="bottom right",
+            marker=dict(size=10), showlegend=False
+        ))
+
+        # crosshair helpers
+        y_floor = float(min(np.nanmin(buy_vals), np.nanmin(sell_vals), 0.0))
+        fig_curve.add_trace(go.Scatter(x=[reserve_clamped, reserve_clamped], y=[y_floor, pb],
+                                    mode='lines', line=dict(dash='dot'), showlegend=False))
+        fig_curve.add_trace(go.Scatter(x=[x_lo, reserve_clamped], y=[pb, pb],
+                                    mode='lines', line=dict(dash='dot'), showlegend=False))
+        fig_curve.add_trace(go.Scatter(x=[reserve_clamped, reserve_clamped], y=[y_floor, ps],
+                                    mode='lines', line=dict(dash='dot'), showlegend=False))
+        fig_curve.add_trace(go.Scatter(x=[x_lo, reserve_clamped], y=[ps, ps],
+                                    mode='lines', line=dict(dash='dot'), showlegend=False))
+
+        fig_curve.update_layout(
+            title=f'{token} Price vs Shares — {curve_choice}',
+            xaxis_title='Shares',
+            yaxis_title='Price',
+            hovermode="x unified",
+        )
+
+        # respect custom axes
+        if x_mode == "Custom":
+            fig_curve.update_xaxes(range=[x_lo, x_hi])
+        if y_mode == "Custom":
+            fig_curve.update_yaxes(range=[float(y_min), float(y_max)])
+
+        tab.plotly_chart(fig_curve, use_container_width=True, key=f"chart_curve_{token}")
+
+    st.divider()
 
 
 # ---------- Mode switch ----------
