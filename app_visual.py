@@ -14,6 +14,7 @@ OUTCOMES = ['A', 'B', 'C']
 MAX_SHARES = 5000000 # 5M
 
 SHARE_DISPLAY_OPTIONS = [50000, 100000, 250000, 500000, 1000000]
+PRESET_SHARE_QUANTITY_OPTIONS = [10000, 25000, 50000, 100000, 250000, 500000, 1000000, 25000000]
 APP_MODES = ["Curve Viewer", "Simulator"]
 
 # ===========================================================
@@ -284,7 +285,7 @@ with st.sidebar:
     if qty_mode == "Preset list":
         preset_qty = st.selectbox(
             "Preset share quantity (for charts)",
-            [10000, 25000, 50000, 100000, 250000, 5000000, 1000000],
+            PRESET_SHARE_QUANTITY_OPTIONS,
             index=1
         )
 
