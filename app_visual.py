@@ -1,4 +1,4 @@
-# file: app.py
+# file: app_visual.py
 import streamlit as st
 from datetime import datetime
 import pandas as pd
@@ -41,71 +41,6 @@ def secondary_buy_curve(x):      # your current model
 
 def secondary_buy_delta(x):
     return (3.0/4000.0) * (x**(4.0/3.0)) + x/10.0
-# # #2 Model: Baseline
-# # Example alt set 1: smoother convex buy, piecewise sell (edit freely)
-# def alt1_buy_curve(x):
-#     return 0.02 * np.sqrt(x + 1) + (x / 500)
-
-# def alt1_sell_curve(x):
-#     # gentle slope at start, steeper later
-#     return 0.015 * x + 0.00015 * (x**2) / (1 + 0.0005 * x)
-
-# def alt1_buy_delta(x):
-#     # ∫ alt1_buy_curve dx
-#     return 0.02 * (2/3) * (x + 1)**(3/2) + (x**2) / 1000
-
-# def alt1_sell_delta(x):
-#     # primitive of alt1_sell_curve (approx closed form for demo)
-#     return 0.015 * x**2 / 2 + 0.00015 * (x**3) / (3 + 0.0015 * x)  # simple smooth approx
-
-# # #3 Model: Baseline
-# # Example alt set 2: linear buy, cubic-ish sell (edit freely)
-# def alt2_buy_curve(x):
-#     return 0.03 * x + 2.5
-
-# def alt2_sell_curve(x):
-#     return 2.2 + 0.02 * x + 1e-6 * x**3
-
-# def alt2_buy_delta(x):
-#     return 0.03 * x**2 / 2 + 2.5 * x
-
-# def alt2_sell_delta(x):
-#     return 2.2 * x + 0.02 * x**2 / 2 + 1e-6 * x**4 / 4
-
-
-# ---------- [DEPRECATED] Variants ----------
-# def sell_curve_1(x: float) -> float:
-#     """y = (x-100000)/(40000*sqrt(10000 + ((x-100000)/10000)^2)) + (x-100000)/800000000"""
-#     dx = x - 100000.0
-#     return dx / (40000.0 * math.sqrt(10000.0 + (dx/10000.0)**2)) + dx / 800000000.0
-
-# def sell_delta_1(x: float) -> float:
-#     """∫ y dx = x^2/1_600_000_000 + x/8000 + sqrt((x-100000)^2 + 1e12)/4  (up to +C)"""
-#     dx = x - 100000.0
-#     return (x**2) / 1_600_000_000.0 + x / 8000.0 + math.sqrt(dx*dx + 1_000_000_000_000.0) / 4.0
-
-
-# def sell_curve_2(x: float) -> float:
-#     """y = (x-100000)/(20000*sqrt(20000 + ((x-100000)/4000)^2)) + (x-100000)/400000000"""
-#     dx = x - 100000.0
-#     return dx / (20000.0 * math.sqrt(20000.0 + (dx/4000.0)**2)) + dx / 400_000_000.0
-
-# def sell_delta_2(x: float) -> float:
-#     """∫ y dx = x^2/800_000_000 + x/4000 + sqrt((x-100000)^2 + 3.2e11)/5  (up to +C)"""
-#     dx = x - 100000.0
-#     return (x**2) / 800_000_000.0 + x / 4000.0 + math.sqrt(dx*dx + 320_000_000_000.0) / 5.0
-
-
-# def sell_curve_3(x: float) -> float:
-#     """y = (x-100000)/(20000*sqrt(50000 + ((x-100000)/2000)^2)) + (x-100000)/400000000 + 0.1"""
-#     dx = x - 100000.0
-#     return dx / (20000.0 * math.sqrt(50000.0 + (dx/2000.0)**2)) + dx / 400_000_000.0 + 0.1
-
-# def sell_delta_3(x: float) -> float:
-#     """∫ y dx = x^2/800_000_000 + 0.09975*x + sqrt((x-100000)^2 + 2e11)/10  (up to +C)"""
-#     dx = x - 100000.0
-#     return (x**2) / 800_000_000.0 + 0.09975 * x + math.sqrt(dx*dx + 200_000_000_000.0) / 10.0
-
 
 # =========================
 # NumPy (vectorized) versions
@@ -183,27 +118,6 @@ CURVE_SETS = {
         "sell_delta": baseline_sell_delta,
         "max_shares": 1000000,    # per-set override if you like
     },
-    # "Updated (redeem v1)": {
-    #     "buy_curve": secondary_buy_curve,
-    #     "sell_curve": sell_curve_1,
-    #     "buy_delta": secondary_buy_delta,
-    #     "sell_delta": sell_delta_1,
-    #     "max_shares": MAX_SHARES,
-    # },
-    # "Updated (redeem v2)": {
-    #     "buy_curve": secondary_buy_curve,
-    #     "sell_curve": sell_curve_2,
-    #     "buy_delta": secondary_buy_delta,
-    #     "sell_delta": sell_delta_2,
-    #     "max_shares": MAX_SHARES,
-    # },
-    # "Updated (redeem v3)": {
-    #     "buy_curve": secondary_buy_curve,
-    #     "sell_curve": sell_curve_3,
-    #     "buy_delta": secondary_buy_delta,
-    #     "sell_delta": sell_delta_3,
-    #     "max_shares": MAX_SHARES,
-    # },
      "Flat":   {"buy_curve": flat_buy_curve_np,   "buy_delta": flat_buy_delta_np,
                "sell_curve": flat_sell_curve_np, "sell_delta": flat_sell_delta_np, "max_shares": MAX_SHARES},
     "Steep":  {"buy_curve": steep_buy_curve_np,  "buy_delta": steep_buy_delta_np,
@@ -258,8 +172,8 @@ def qty_from_sell_usdc(reserve: int, usd: float) -> int:
     return int(q)
 
 # Configuration Init
-st.set_page_config(page_title="Bonding Curve Simulator", layout="wide")
-st.title("42: Twin Bonding Curve Simulatoooor")
+st.set_page_config(page_title="42 DPM Visualizer", layout="wide")
+st.title("42: Twin Bonding Curve Static Visualizooor")
 
 with st.sidebar:
     st.header("Mode")
