@@ -173,7 +173,7 @@ def qty_from_sell_usdc(reserve: int, usd: float) -> int:
 
 # Configuration Init
 st.set_page_config(page_title="42 DPM Visualizer", layout="wide")
-st.title("42: Twin Bonding Curve Static Visualizooor")
+st.title("42: DPM Static Visualizooor")
 
 with st.sidebar:
     st.header("Mode")
