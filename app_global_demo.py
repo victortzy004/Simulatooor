@@ -1059,8 +1059,16 @@ usdc_input = 0.0
 if input_mode == "Quantity":
     quantity = st.number_input("Enter Quantity", min_value=1, step=1)
 else:
-    usdc_input = st.number_input("Enter USDC Amount", min_value=0.0, step=0.1)
-
+    usdc_str = st.text_input("Enter USDC Amount", key="usdc_input_raw", placeholder="0.00")
+    try:
+        usdc_input = float(usdc_str) if usdc_str.strip() else 0.0
+        if usdc_input < 0:
+            st.warning("USDC must be ≥ 0.")
+            usdc_input = 0.0
+    except ValueError:
+        st.warning("Enter a valid number, e.g. 123.45")
+        usdc_input = 0.0
+        
 st.subheader("Buy/Sell Controls")
 cols = st.columns(4)
 
