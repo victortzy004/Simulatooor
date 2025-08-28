@@ -15,11 +15,11 @@ from contextlib import closing
 DEFAULT_DECIMAL_PRECISION = 2
 BASE_EPSILON = 1e-4
 MARKET_DURATION_DAYS = 5
-END_TS = "2025-08-29 00:00"
+END_TS = "2025-09-07 00:00"
 DB_PATH = "app.db"
 MAX_SHARES = 500000 #10M
 STARTING_BALANCE = 50000.0 #50k
-MARKET_QUESTION = "Will the total crypto market cap be larger than NVIDIA's market cap by the 29th Aug?"
+MARKET_QUESTION = "Will the total crypto market cap be larger than NVIDIA's market cap by the 7th Sept?"
 
 RESOLUTION_NOTE = (
     'This market will resolve to "YES" if the total cryptocurrency market capitalization '
@@ -52,8 +52,8 @@ PHASE_MULTIPLIERS = {
 }
 # ===========================================================
 # Streamlit Setup
-st.set_page_config(page_title="42: Simulatoooor (Global)", layout="wide")
-st.title("42: Twin Bonding Curve Simulatoooor — Global PVP")
+st.set_page_config(page_title="42:DPM Demo(Global)", layout="wide")
+st.title("42: DPM Demo — Global PVP")
 
 st.subheader(f":blue[{MARKET_QUESTION}]")
 
@@ -1659,61 +1659,82 @@ if not txp.empty:
             pnl = pv - STARTING_BALANCE
             records.append({"Time": r["Time"], "User": s["username"], "PortfolioValue": pv, "PnL": pnl})
 
+    port_df2 = pd.DataFrame(records)  # <- use a fresh DF for this block
     st.divider()
     st.subheader("🏆 Leaderboard (Portfolio, PnL & Points)")
 
-    # Latest portfolio snapshot per user
+    # Latest portfolio snapshot per user (use port_df2, not the earlier port_df from the tab)
     latest = (
-        port_df.sort_values("Time")
+        port_df2.sort_values("Time")
         .groupby("User", as_index=False)
         .last()[["User", "PortfolioValue", "PnL"]]
     )
 
-    # Exclude admin
+    # Exclude admin if you like
     latest = latest[latest["User"].str.lower() != "admin"]
     latest["PnL"] = latest["PortfolioValue"] - STARTING_BALANCE
 
-    # === Compute points ===
-    # 1) Volume points from transaction stream with phase multipliers
-    points_vol = compute_user_points(txp, users_df)  # txp & users_df already computed above
+    # ---- NEW: compute payout received at resolution from tx log ----
+    with closing(get_conn()) as conn:
+        payouts_df = pd.read_sql_query(
+            """
+            SELECT u.username AS User,
+                COALESCE(SUM(t.sell_delta), 0.0) AS Payout
+            FROM transactions t
+            JOIN users u ON u.id = t.user_id
+            WHERE t.action = 'Resolve'
+            GROUP BY u.username
+            """,
+            conn,
+        )
 
-    # 2) PnL points: only for positive PnL
+    latest = latest.merge(payouts_df, on="User", how="left")
+    latest["Payout"] = pd.to_numeric(latest["Payout"], errors="coerce").fillna(0.0)
+
+    # === Compute points === (unchanged)
+    points_vol = compute_user_points(txp, users_df)
     pnl_points = latest[["User", "PnL"]].copy()
     pnl_points["PnLPoints"] = pnl_points["PnL"].clip(lower=0.0) * PNL_POINTS_PER_USD
     pnl_points = pnl_points[["User", "PnLPoints"]]
-
-    # 3) Merge points
     pts = points_vol.merge(pnl_points, on="User", how="left")
     pts["PnLPoints"] = pts["PnLPoints"].fillna(0.0)
     pts["TotalPoints"] = pts["VolumePoints"] + pts["PnLPoints"]
 
-    # 4) Merge points into leaderboard
-    latest = latest.merge(pts[["User", "VolumePoints", "PnLPoints", "TotalPoints"]], on="User", how="left")
-    latest[["VolumePoints", "PnLPoints", "TotalPoints"]] = latest[["VolumePoints", "PnLPoints", "TotalPoints"]].fillna(0.0)
+    latest = latest.merge(
+        pts[["User", "VolumePoints", "PnLPoints", "TotalPoints"]],
+        on="User",
+        how="left",
+    ).fillna({"VolumePoints": 0.0, "PnLPoints": 0.0, "TotalPoints": 0.0})
 
-    # Sort leaderboard however you like; keep by PnL for now
-    latest = latest.sort_values("PnL", ascending=False)
+    # ---- UI: let you sort by Payout to verify equal payouts after resolution ----
+    metric_choice = st.radio(
+        "Leaderboard metric (sort by):", ["Portfolio Value", "PnL", "Payout"], horizontal=True, key="lb_metric"
+    )
+    sort_key = {"Portfolio Value": "PortfolioValue", "PnL": "PnL", "Payout": "Payout"}[metric_choice]
+    latest = latest.sort_values(sort_key, ascending=False)
 
-    if latest.empty:
-        st.info("No eligible users to display yet.")
-    else:
-        top_cols = st.columns(min(3, len(latest)))
-        for i, (_, row) in enumerate(latest.head(3).iterrows()):
-            with top_cols[i]:
-                delta_val = f"${row['PnL']:,.2f}" if row['PnL'] >= 0 else f"-${abs(row['PnL']):,.2f}"
-                st.metric(
-                    label=f"#{i+1} {row['User']}",
-                    value=f"${row['PortfolioValue']:,.2f}",
-                    delta=delta_val,
-                    border=True
-                )
-                # Optional: mini points callout
-                st.caption(f"Points: {row['TotalPoints']:,.0f}")
+    # Optional fairness check after resolution
+    if resolved_flag == 1 and not payouts_df.empty and payouts_df["Payout"].nunique() == 1:
+        st.caption("✅ All payouts are equal (same winning shares).")
 
-        st.dataframe(
-            latest[["User", "PortfolioValue", "PnL", "VolumePoints", "PnLPoints", "TotalPoints"]],
-            use_container_width=True
-        )
+    # Top cards + table (add Payout column)
+    top_cols = st.columns(min(3, len(latest)))
+    for i, (_, row) in enumerate(latest.head(3).iterrows()):
+        with top_cols[i]:
+            delta_val = f"${row['PnL']:,.2f}" if row['PnL'] >= 0 else f"-${abs(row['PnL']):,.2f}"
+            st.metric(
+                label=f"#{i+1} {row['User']}",
+                value=f"${row['PortfolioValue']:,.2f}",
+                delta=delta_val,
+                border=True
+            )
+            st.caption(f"Payout: ${row['Payout']:,.2f}")
+            st.caption(f"Points: {row['TotalPoints']:,.0f}")
+
+    st.dataframe(
+        latest[["User", "Payout", "PortfolioValue", "PnL", "VolumePoints", "PnLPoints", "TotalPoints"]],
+        use_container_width=True
+    )
 
 else:
     st.info("No transactions yet to compute portfolio history.")
