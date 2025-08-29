@@ -1160,7 +1160,7 @@ for i, token in enumerate(TOKENS):
         st.caption(
             f"Est. Buy Cost ({est_q_buy}x sh): **{est_buy_cost:,.2f} USDC**  \n"
             f"Est. Sell Proceeds ({est_q_sell}x sh): **{est_sell_proceeds:,.2f} USDC**  \n"
-            f"Order Tax on Sell: **{est_tax_rate*100:.2f}%**"
+            f"Sell Order Slippage: **{est_tax_rate*100:.2f}%**"
         )
         
 
@@ -1296,7 +1296,7 @@ for i, token in enumerate(TOKENS):
     s = int(res_df.loc[res_df['Token']==token, 'Shares'].iloc[0])
     odds_val = '-' if s == 0 else round(1 / (s / total_market_shares), 2)
     with sub_cols_2[i]:
-        st.metric(f"Odds [{token}]", f"{odds_val}x" if odds_val != '-' else "-", border=True)
+        st.metric(f"Payout [{token}]", f"{odds_val}x" if odds_val != '-' else "-", border=True)
 # ===========================================================
 # Logs & Charts from DB
 with closing(get_conn()) as conn:
@@ -1432,7 +1432,7 @@ for token, token_tab in zip(TOKENS, token_tabs):
         # One radio to switch sub-graphs (no nested tabs)
         view = st.radio(
             "View",
-            ["Buy Curve", "Sale Tax", "Effective Sell (Net)"],
+            ["Buy Curve", "Sell Spread", "Effective Sell (Net)"],
             horizontal=True,
             key=f"view_{token}",
         )
@@ -1491,9 +1491,9 @@ for token, token_tab in zip(TOKENS, token_tabs):
             )
             st.plotly_chart(fig_curve, use_container_width=True, key=f"chart_curve_{token}")
 
-        elif view == "Sale Tax":
+        elif view == "Sell Spread":
             if reserve <= 0:
-                st.info("No circulating shares yet — tax curve will show once there is supply.")
+                st.info("No circulating shares yet — Sell spread curve will show once there is supply.")
             else:
                 steps = 200
                 X = np.linspace(0.0, 1.0, steps + 1)
@@ -1508,9 +1508,9 @@ for token, token_tab in zip(TOKENS, token_tabs):
                 ))
                 
                 fig_tax.update_layout(
-                title='Sale Tax vs % of Supply Sold (per order)',
+                title='Sell Spread vs % of Supply Sold (per order)',
                 xaxis_title='% of Current Supply Sold in Order',
-                yaxis_title='Tax Rate',
+                yaxis_title='Spread Rate',
                 hovermode="x unified",   # nice unified hover; vertical guide
                 spikedistance=-1         # show spikes whenever the mouse is in the plot
                 )
@@ -1540,7 +1540,7 @@ for token, token_tab in zip(TOKENS, token_tabs):
                 # )
                 # # Format Y as percentages
                 # fig_tax.update_yaxes(tickformat=".0%", range=[0, 1])
-                st.plotly_chart(fig_tax, use_container_width=True, key=f"sale_tax_curve_{token}")
+                st.plotly_chart(fig_tax, use_container_width=True, key=f"sell_spread_curve_{token}")
 
         else:  # "Effective Sell (Net)"
             C = reserve
