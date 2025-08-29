@@ -1277,7 +1277,7 @@ for i, token in enumerate(TOKENS):
         with sub_cols[1]:
             st.metric(f"Price", f"${price}")
         with sub_cols[2]:
-            st.metric(f"MCAP", format_usdc_compact(mcap_now))
+            st.metric(f"MCAP", format_usdc_compact(mcap))
 
 
 # Odds based on circulating shares
