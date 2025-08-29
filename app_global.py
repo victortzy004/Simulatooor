@@ -219,6 +219,34 @@ def qty_from_sell_usdc(reserve: int, usd: float) -> int:
             hi = mid - 1
     return int(lo)
 
+def format_usdc_compact(value: float) -> str:
+    """Compact money: $999.99, $1.2K, $12.3M, $4B, $5T (no trailing .0)."""
+    sign = "-" if value < 0 else ""
+    v = abs(float(value))
+
+    units = [(1e12, "T"), (1e9, "B"), (1e6, "M"), (1e3, "K")]
+    for i, (scale, suf) in enumerate(units):
+        if v >= scale:
+            q = v / scale
+            # adaptive decimals
+            dec = 2 if q < 10 else (1 if q < 100 else 0)
+            s = f"{q:.{dec}f}"
+
+            # If rounding hit 1000 of current unit, bump to the next unit
+            if float(s) >= 1000 and i > 0:
+                next_scale, next_suf = units[i - 1]
+                q = v / next_scale
+                dec = 2 if q < 10 else (1 if q < 100 else 0)
+                s = f"{q:.{dec}f}"
+                suf = next_suf
+
+            # strip trailing zeros / dot
+            s = s.rstrip("0").rstrip(".")
+            return f"{sign}${s}{suf}"
+
+    # < 1,000 — show standard money
+    return f"{sign}${v:,.2f}"
+
 # ===========================================================
 # DB Helpers
 def get_conn():
@@ -364,6 +392,7 @@ def compute_cost_basis(user_id: int) -> dict:
         sh = basis[t]['shares']
         basis[t]['avg_cost'] = (basis[t]['cost'] / sh) if sh > 0 else 0.0
     return basis
+
 
 # For points computation
 def compute_user_points(tx_df: pd.DataFrame, users_df: pd.DataFrame) -> pd.DataFrame:
@@ -1092,8 +1121,8 @@ for i, token in enumerate(TOKENS):
         reserve = int(reserves_map[token]["shares"])  # global shares for token
         price_now = round(buy_curve(reserve), 2)
         mcap_now = round(reserves_map[token]["usdc"], 2)
-        st.text(f"Current Price: {price_now}")
-        st.text(f"MCAP: {mcap_now}")
+        st.text(f"Current Price: ${price_now}")
+        st.text(f"MCAP: {format_usdc_compact(mcap_now)}")
 
          # --- Preview section (live estimate) ---
         # derive est quantities from current inputs (without executing)
@@ -1246,9 +1275,9 @@ for i, token in enumerate(TOKENS):
         with sub_cols[0]:
             st.metric(f"Total Shares", reserve)
         with sub_cols[1]:
-            st.metric(f"Price", price)
+            st.metric(f"Price", f"${price}")
         with sub_cols[2]:
-            st.metric(f"MCAP", mcap)
+            st.metric(f"MCAP", format_usdc_compact(mcap_now))
 
 
 # Odds based on circulating shares
