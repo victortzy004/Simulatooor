@@ -19,17 +19,23 @@ END_TS = "2025-09-07 00:00"
 DB_PATH = "app.db"
 MAX_SHARES = 500000 #10M
 STARTING_BALANCE = 50000.0 #50k
-MARKET_QUESTION = "Will the total crypto market cap be larger than NVIDIA's market cap by the 7th Sept?"
-
+MARKET_QUESTION = "Price of Ethereum by 7th Sept?"
 RESOLUTION_NOTE = (
-    'This market will resolve to "YES" if the total cryptocurrency market capitalization '
-    'as reported by CoinGecko is greater than the market capitalization of NVIDIA (NVDA) '
-    'as reported by Yahoo Finance at the resolution timestamp. '
-    'It will resolve to "NO" otherwise. '
-    'If either source is unavailable or shows materially inconsistent data, the admins will use reasonable judgment to determine resolution.'
+    'This market will resolve according to the final "Close" price of the '
+    'Binance 1-minute candle for ETH/USDT at 12:00 UTC.'
 )
+TOKENS = ["<4300", "4300-4700", ">4700"]
+# MARKET_QUESTION = "Will the total crypto market cap be larger than NVIDIA's market cap by the 7th Sept?"
+
+# RESOLUTION_NOTE = (
+#     'This market will resolve to "YES" if the total cryptocurrency market capitalization '
+#     'as reported by CoinGecko is greater than the market capitalization of NVIDIA (NVDA) '
+#     'as reported by Yahoo Finance at the resolution timestamp. '
+#     'It will resolve to "NO" otherwise. '
+#     'If either source is unavailable or shows materially inconsistent data, the admins will use reasonable judgment to determine resolution.'
+# )
 # TOKENS = ["<4200", "4200-4600", ">4600"]
-TOKENS = ["YES", "NO"] 
+# TOKENS = ["YES", "NO"] 
 
 # Whitelisted usernames and admin reset control
 WHITELIST = {"admin", "rui", "haoye", "leo", "steve", "wenbo", "sam", "sharmaine", "mariam", "henry", "guard", "victor", "toby"}
@@ -52,8 +58,8 @@ PHASE_MULTIPLIERS = {
 }
 # ===========================================================
 # Streamlit Setup
-st.set_page_config(page_title="42:DPM Demo(Global)", layout="wide")
-st.title("42: DPM Demo — Global PVP")
+st.set_page_config(page_title="42:Simulator", layout="wide")
+st.title("42:Simulator — Global")
 
 st.subheader(f":blue[{MARKET_QUESTION}]")
 
@@ -890,8 +896,7 @@ if market_row:
                     </p>
                     <h5>🔗 Resolution Sources/Resources:</h5>
                     <ul>
-                        <li><a href="https://www.coingecko.com/" target="_blank">CoinGecko: Total Crypto Market Cap</a></li>
-                        <li><a href="https://finance.yahoo.com/quote/NVDA/" target="_blank">Yahoo Finance: NVIDIA (NVDA)</a></li>
+                        <li><a href="https://www.binance.com/en/trade/ETH_USDT?type=spot/" target="_blank">Binance International: ETH/USDT Spot Market</a></li>
                     </ul>
                 </div>
                 """,
@@ -1068,7 +1073,7 @@ else:
     except ValueError:
         st.warning("Enter a valid number, e.g. 123.45")
         usdc_input = 0.0
-        
+
 st.subheader("Buy/Sell Controls")
 cols = st.columns(4)
 
@@ -1239,11 +1244,11 @@ for i, token in enumerate(TOKENS):
         mcap = round(float(row['USDC']), 2)
         sub_cols = st.columns(4)
         with sub_cols[0]:
-            st.metric(f"Total Shares {token}", reserve)
+            st.metric(f"Total Shares", reserve)
         with sub_cols[1]:
-            st.metric(f"Price {token}", price)
+            st.metric(f"Price", price)
         with sub_cols[2]:
-            st.metric(f"MCAP {token}", mcap)
+            st.metric(f"MCAP", mcap)
 
 
 # Odds based on circulating shares
@@ -1255,7 +1260,7 @@ for i, token in enumerate(TOKENS):
     s = int(res_df.loc[res_df['Token']==token, 'Shares'].iloc[0])
     odds_val = '-' if s == 0 else round(1 / (s / total_market_shares), 2)
     with sub_cols_2[i]:
-        st.metric(f"Odds {token}", f"{odds_val}x" if odds_val != '-' else "-", border=True)
+        st.metric(f"Odds [{token}]", f"{odds_val}x" if odds_val != '-' else "-", border=True)
 # ===========================================================
 # Logs & Charts from DB
 with closing(get_conn()) as conn:
@@ -1463,14 +1468,42 @@ for token, token_tab in zip(TOKENS, token_tabs):
 
                 fig_tax = go.Figure()
                 fig_tax.add_trace(go.Scattergl(
-                    x=X * 100.0, y=tax_y, mode='lines', name='Sale Tax Rate'
+                    x=X * 100.0, y=tax_y, mode='lines', marker=dict(size=10),  name='Sale Tax Rate'
                 ))
+                
                 fig_tax.update_layout(
-                    title='Sale Tax vs % of Supply Sold (per order)',
-                    xaxis_title='% of Current Supply Sold in Order',
-                    yaxis_title='Tax Rate',
-                    hovermode="x unified"
+                title='Sale Tax vs % of Supply Sold (per order)',
+                xaxis_title='% of Current Supply Sold in Order',
+                yaxis_title='Tax Rate',
+                hovermode="x unified",   # nice unified hover; vertical guide
+                spikedistance=-1         # show spikes whenever the mouse is in the plot
                 )
+
+                # X spikes (to x-axis)
+                fig_tax.update_xaxes(
+                showspikes=True,
+                spikemode="across",      # draw across the plot area
+                spikesnap="cursor",      # follow the cursor position
+                spikedash="dot"          # dotted line
+                )
+
+                # Y spikes (to y-axis) + percent ticks
+                fig_tax.update_yaxes(
+                tickformat=".0%",
+                range=[0, 1],
+                showspikes=True,
+                spikemode="across",
+                spikesnap="cursor",
+                spikedash="dot"
+                )
+                # fig_tax.update_layout(
+                #     title='Sale Tax vs % of Supply Sold (per order)',
+                #     xaxis_title='% of Current Supply Sold in Order',
+                #     yaxis_title='Tax Rate',
+                #     hovermode="x unified"
+                # )
+                # # Format Y as percentages
+                # fig_tax.update_yaxes(tickformat=".0%", range=[0, 1])
                 st.plotly_chart(fig_tax, use_container_width=True, key=f"sale_tax_curve_{token}")
 
         else:  # "Effective Sell (Net)"

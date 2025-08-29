@@ -15,28 +15,34 @@ from contextlib import closing
 DEFAULT_DECIMAL_PRECISION = 2
 BASE_EPSILON = 1e-4
 MARKET_DURATION_DAYS = 5
-END_TS = "2025-08-29 00:00"
+END_TS = "2025-09-07 00:00"
 DB_PATH = "app.db"
-MAX_SHARES = 5000000 #10M
+MAX_SHARES = 500000 #10M
 STARTING_BALANCE = 50000.0 #50k
-MARKET_QUESTION = "Will the total crypto market cap be larger than NVIDIA's market cap by the 29th Aug?"
-
+MARKET_QUESTION = "Price of Ethereum by 7th Sept?"
 RESOLUTION_NOTE = (
-    'This market will resolve to "YES" if the total cryptocurrency market capitalization '
-    'as reported by CoinGecko is greater than the market capitalization of NVIDIA (NVDA) '
-    'as reported by Yahoo Finance at the resolution timestamp. '
-    'It will resolve to "NO" otherwise. '
-    'If either source is unavailable or shows materially inconsistent data, the admins will use reasonable judgment to determine resolution.'
+    'This market will resolve according to the final "Close" price of the '
+    'Binance 1-minute candle for ETH/USDT at 12:00 UTC.'
 )
+TOKENS = ["<4300", "4300-4700", ">4700"]
+# MARKET_QUESTION = "Will the total crypto market cap be larger than NVIDIA's market cap by the 7th Sept?"
+
+# RESOLUTION_NOTE = (
+#     'This market will resolve to "YES" if the total cryptocurrency market capitalization '
+#     'as reported by CoinGecko is greater than the market capitalization of NVIDIA (NVDA) '
+#     'as reported by Yahoo Finance at the resolution timestamp. '
+#     'It will resolve to "NO" otherwise. '
+#     'If either source is unavailable or shows materially inconsistent data, the admins will use reasonable judgment to determine resolution.'
+# )
 # TOKENS = ["<4200", "4200-4600", ">4600"]
-TOKENS = ["YES", "NO"] 
+# TOKENS = ["YES", "NO"] 
 
 # Whitelisted usernames and admin reset control
 WHITELIST = {"admin", "rui", "haoye", "leo", "steve", "wenbo", "sam", "sharmaine", "mariam", "henry", "guard", "victor", "toby"}
 
 # Inflection Points
-EARLY_QUANTITY_POINT = 5000000
-MID_QUANTITY_POINT = 15000000
+EARLY_QUANTITY_POINT = 270
+MID_QUANTITY_POINT = 630
 
 # ==== Points System (tunable) ====
 TRADE_POINTS_PER_USD = 10.0   # Buy & Sell volume → 10 pts per $1 traded
@@ -52,8 +58,8 @@ PHASE_MULTIPLIERS = {
 }
 # ===========================================================
 # Streamlit Setup
-st.set_page_config(page_title="42: Simulatoooor (Global)", layout="wide")
-st.title("42: Twin Bonding Curve Simulatoooor — Global PVP")
+st.set_page_config(page_title="42:Simulator", layout="wide")
+st.title("42:Simulator — Global")
 
 st.subheader(f":blue[{MARKET_QUESTION}]")
 
@@ -88,13 +94,88 @@ def sell_delta(x: float) -> float:
     return 312_500.0 * math.log1p(0.8 * math.exp(t)) - 0.05 * x
     # return 1.93333 * x + 0.00166667 * x**2 + 2 * math.sqrt(301200 - 1000 * x + x**2)
 
+
+# ===== Sale Tax Helpers (new) =====
+def _clamp01(x: float) -> float:
+    return 0.0 if x < 0.0 else (1.0 if x > 1.0 else x)
+
+def sale_tax_rate(q: int, C: int) -> float:
+    """
+    q: number of shares sold in *this order*
+    C: total circulating shares (reserve) before the sale
+
+    Tax = min(1, (1.15 - 1.3/(1 + e^(4*(q/C) - 2))))
+
+    We clamp to [0,1] to keep it sane even if the scaling makes it big.
+    """
+    if C <= 0 or q <= 0:
+        return 0.0
+    X = q / float(C)  # fraction of supply this order is selling
+    base = 1.15 - 1.3 / (1.0 + math.e ** (4.0 * X - 2.0))
+    # scale = C * math.e ** ((C / 100000.0 - 1.0) / 10000.0)
+    # tax = base * scale
+    tax = base
+    return _clamp01(tax)
+
+def sell_proceeds_net(reserve: int, q: int) -> float:
+    """Net USDC user receives after the order-level sale tax."""
+    if q <= 0 or reserve <= 0:
+        return 0.0
+    q = min(q, reserve)
+    gross = buy_delta(reserve) - buy_delta(reserve - q)
+    tax = sale_tax_rate(q, reserve)
+    net = gross * (1.0 - tax)
+    return max(0.0, float(net))
+
+def current_marginal_sell_price_after_tax(reserve: int) -> float:
+    """
+    A single-share 'instant' effective price (for UI display).
+    Uses q=1 to estimate marginal price after tax.
+    """
+    if reserve <= 0:
+        return 0.0
+    gross1 = buy_delta(reserve) - buy_delta(reserve - 1)
+    tax1 = sale_tax_rate(1, reserve)
+    return max(0.0, float(gross1 * (1.0 - tax1)))
+
+def sell_gross_from_bonding(reserve: int, q: int) -> float:
+    """Bonding-curve gross proceeds (no tax), using your buy integral as the primitive."""
+    if q <= 0 or reserve <= 0:
+        return 0.0
+    q = min(q, reserve)
+    return float(buy_delta(reserve) - buy_delta(reserve - q))
+
+# vectorized tax (for charts)
+_sale_tax_rate_vec = np.vectorize(sale_tax_rate, otypes=[float])
+
 def metrics_from_qty(x: int, q: int):
+    """
+    Returns (in order):
+      buy_price         = buy spot after adding q
+      sell_price        = marginal 1-share sell price after tax (display only)
+      buy_amt_delta     = USDC to buy q
+      sell_amt_delta    = USDC received to sell q after tax
+      sell_tax_rate_used= order-level tax applied for selling q out of reserve x (0..1)
+    """
+    q = int(max(0, q))
     new_x = x + q
+
     buy_price = buy_curve(new_x)
-    sell_price = sell_curve(x)
+    sell_price = current_marginal_sell_price_after_tax(x)
+
     buy_amt_delta = buy_delta(new_x) - buy_delta(x)
-    sell_amt_delta = sell_delta(x) - sell_delta(x - q) if x - q >= 0 else 0.0
-    return buy_price, sell_price, buy_amt_delta, sell_amt_delta
+
+    # Clamp sell qty to circulating reserve for proceeds + tax computation
+    q_eff = min(q, x if x > 0 else 0)
+    if q_eff > 0 and x > 0:
+        tax_used = sale_tax_rate(q_eff, x)
+        sell_amt_delta = sell_proceeds_net(x, q_eff)
+    else:
+        tax_used = 0.0
+        sell_amt_delta = 0.0
+
+    return buy_price, sell_price, buy_amt_delta, sell_amt_delta, float(tax_used)
+
 
 def qty_from_buy_usdc(reserve: int, usd: float) -> int:
     if usd <= 0:
@@ -116,48 +197,27 @@ def qty_from_buy_usdc(reserve: int, usd: float) -> int:
     return int(q)
 
 def qty_from_sell_usdc(reserve: int, usd: float) -> int:
-    if usd <= 0:
+    if usd <= 0.0 or reserve <= 0:
         return 0
-    # initial guess: linear approx using current sell price
-    q = usd / max(sell_curve(reserve), 1e-9)
-    q = max(0.0, min(q, float(reserve)))
 
-    for _ in range(12):
-        f  = (sell_delta(reserve) - sell_delta(reserve - q)) - usd
-        fp = max(sell_curve(reserve - q), 1e-9)  # df/dq = price at (reserve - q)
-        step = f / fp
-        q -= step
-        if q < 0.0: q = 0.0
-        if q > reserve: q = float(reserve)
-        if abs(step) < 1e-6:
-            break
-    return int(q)
-# Binary searches
+    # initial guess using current *net* marginal price
+    p0_net = max(current_marginal_sell_price_after_tax(reserve), 1e-12)
+    q_guess = min(reserve, usd / p0_net)
 
-# def qty_from_buy_usdc(reserve: int, usdc_amount: float) -> int:
-#     low, high = 0.0, 10000000
-#     eps = BASE_EPSILON
-#     while high - low > eps:
-#         mid = (low + high) / 2
-#         delta = buy_delta(reserve + mid) - buy_delta(reserve)
-#         if delta < usdc_amount:
-#             low = mid
-#         else:
-#             high = mid
-#     return max(0, math.floor(low))
+    # robust binary search on net proceeds
+    lo, hi = 0, int(reserve)
+    # tighten bounds around the guess to speed up
+    lo = max(0, int(q_guess * 0.25))
+    hi = min(int(reserve), max(lo, int(q_guess * 1.75)))
 
-
-# def qty_from_sell_usdc(reserve: int, usdc_amount: float) -> int:
-#     low, high = 0.0, float(reserve)
-#     eps = BASE_EPSILON
-#     while high - low > eps:
-#         mid = (low + high) / 2
-#         delta = sell_delta(reserve) - sell_delta(reserve - mid)
-#         if delta < usdc_amount:
-#             low = mid
-#         else:
-#             high = mid
-#     return max(0, math.floor(low))
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        net = sell_proceeds_net(reserve, mid)
+        if net <= usd:
+            lo = mid
+        else:
+            hi = mid - 1
+    return int(lo)
 
 # ===========================================================
 # DB Helpers
@@ -490,12 +550,6 @@ init_db()
 ensure_market_resolution_columns()
 
 
-# To-check:
-@st.cache_data(show_spinner=False)
-def cached_curve_samples(max_shares:int, reserve:int):
-    xs = _curve_samples(max_shares, reserve)
-    return xs, buy_curve_np(xs), sell_curve_np(xs)
-# To-check:
 @st.cache_data(show_spinner=False)
 def load_tx_and_users(cache_key:int):
     with closing(get_conn()) as conn:
@@ -842,8 +896,7 @@ if market_row:
                     </p>
                     <h5>🔗 Resolution Sources/Resources:</h5>
                     <ul>
-                        <li><a href="https://www.coingecko.com/" target="_blank">CoinGecko: Total Crypto Market Cap</a></li>
-                        <li><a href="https://finance.yahoo.com/quote/NVDA/" target="_blank">Yahoo Finance: NVIDIA (NVDA)</a></li>
+                        <li><a href="https://www.binance.com/en/trade/ETH_USDT?type=spot/" target="_blank">Binance International: ETH/USDT Spot Market</a></li>
                     </ul>
                 </div>
                 """,
@@ -1011,7 +1064,15 @@ usdc_input = 0.0
 if input_mode == "Quantity":
     quantity = st.number_input("Enter Quantity", min_value=1, step=1)
 else:
-    usdc_input = st.number_input("Enter USDC Amount", min_value=0.0, step=0.1)
+    usdc_str = st.text_input("Enter USDC Amount", key="usdc_input_raw", placeholder="0.00")
+    try:
+        usdc_input = float(usdc_str) if usdc_str.strip() else 0.0
+        if usdc_input < 0:
+            st.warning("USDC must be ≥ 0.")
+            usdc_input = 0.0
+    except ValueError:
+        st.warning("Enter a valid number, e.g. 123.45")
+        usdc_input = 0.0
 
 st.subheader("Buy/Sell Controls")
 cols = st.columns(4)
@@ -1049,20 +1110,23 @@ for i, token in enumerate(TOKENS):
 
         # buy estimate
         if est_q_buy > 0:
-            _, _, est_buy_cost, _ = metrics_from_qty(reserve, est_q_buy)
+            _, _, est_buy_cost, _, _ = metrics_from_qty(reserve, est_q_buy)
         else:
             est_buy_cost = 0.0
 
-        # sell estimate
+        # sell estimate + tax %
         if est_q_sell > 0:
-            _, _, _, est_sell_proceeds = metrics_from_qty(reserve, est_q_sell)
+            _, _, _, est_sell_proceeds, est_tax_rate = metrics_from_qty(reserve, est_q_sell)
         else:
             est_sell_proceeds = 0.0
+            est_tax_rate = 0.0
 
         st.caption(
             f"Est. Buy Cost ({est_q_buy}x sh): **{est_buy_cost:,.2f} USDC**  \n"
-            f"Est. Sell Proceeds ({est_q_sell}x sh): **{est_sell_proceeds:,.2f} USDC**"
+            f"Est. Sell Proceeds ({est_q_sell}x sh): **{est_sell_proceeds:,.2f} USDC**  \n"
+            f"Order Tax on Sell: **{est_tax_rate*100:.2f}%**"
         )
+        
 
         buy_col, sell_col = st.columns(2)
 
@@ -1080,7 +1144,7 @@ for i, token in enumerate(TOKENS):
                 if q <= 0:
                     st.warning("Quantity computed as 0.")
                 else:
-                    bp, _, bdelta, _ = metrics_from_qty(reserve, q)
+                    bp, _, bdelta, _, _ = metrics_from_qty(reserve, q)
                     # check balance
                     with closing(get_conn()) as conn, conn:
                         c = conn.cursor()
@@ -1127,7 +1191,7 @@ for i, token in enumerate(TOKENS):
                         if user_shares < q:
                             st.error("Insufficient shares to sell.")
                         else:
-                            _, sp, _, sdelta = metrics_from_qty(reserve, q)
+                            _, sp, _, sdelta, _ = metrics_from_qty(reserve, q)
                             # update reserves
                             c.execute("UPDATE reserves SET shares=shares-?, usdc=usdc-? WHERE token=?", (q, sdelta, token))
                             # update user balance (add USDC)
@@ -1180,11 +1244,11 @@ for i, token in enumerate(TOKENS):
         mcap = round(float(row['USDC']), 2)
         sub_cols = st.columns(4)
         with sub_cols[0]:
-            st.metric(f"Total Shares {token}", reserve)
+            st.metric(f"Total Shares", reserve)
         with sub_cols[1]:
-            st.metric(f"Price {token}", price)
+            st.metric(f"Price", price)
         with sub_cols[2]:
-            st.metric(f"MCAP {token}", mcap)
+            st.metric(f"MCAP", mcap)
 
 
 # Odds based on circulating shares
@@ -1196,7 +1260,7 @@ for i, token in enumerate(TOKENS):
     s = int(res_df.loc[res_df['Token']==token, 'Shares'].iloc[0])
     odds_val = '-' if s == 0 else round(1 / (s / total_market_shares), 2)
     with sub_cols_2[i]:
-        st.metric(f"Odds {token}", f"{odds_val}x" if odds_val != '-' else "-", border=True)
+        st.metric(f"Odds [{token}]", f"{odds_val}x" if odds_val != '-' else "-", border=True)
 # ===========================================================
 # Logs & Charts from DB
 with closing(get_conn()) as conn:
@@ -1264,8 +1328,6 @@ if not tx.empty:
 
 # ===========================================================
 
-import numpy as np
-import plotly.graph_objects as go
 # --- smart sampler: dense around reserve, sparse elsewhere ---
 def _curve_samples(max_shares: int, reserve: int, dense_pts: int = 1500, sparse_pts: int = 600) -> np.ndarray:
     if max_shares <= 1:
@@ -1296,98 +1358,185 @@ def buy_curve_np(x: np.ndarray) -> np.ndarray:
     # y = cbrt(x)/1000 + 0.1
     return np.cbrt(x) / 1000.0 + 0.1
 
-def sell_curve_np(x: np.ndarray) -> np.ndarray:
-    # y = 1 / (4 * (0.8 + exp(-(x-500k)/1e6))) - 0.05
-    t = (x.astype(np.float64) - 500_000.0) / 1_000_000.0
-    return 1.0 / (4.0 * (0.8 + np.exp(-t))) - 0.05
+def sell_marginal_net_np(x: np.ndarray) -> np.ndarray:
+    # Effective *net* marginal price for selling 1 share at reserve x
+    # = [gross (x→x-1)] * (1 - tax(q=1, C=x))
+    x = x.astype(int)
+    # gross price for 1 share = buy_delta(x) - buy_delta(x-1)
+    bd = np.vectorize(buy_delta, otypes=[float])(x)
+    bd_prev = np.vectorize(buy_delta, otypes=[float])(np.maximum(0, x - 1))
+    gross_1 = bd - bd_prev
+    tax_1 = _sale_tax_rate_vec(1, x)  # tax for selling 1 share from reserve x
+    net_1 = gross_1 * (1.0 - tax_1)
+    net_1[x <= 0] = 0.0
+    return net_1
 
-# Cache the heavy sampling+eval by (MAX_SHARES, reserve)
 @st.cache_data(show_spinner=False)
 def get_curve_series(max_shares: int, reserve: int, dense_pts: int = 1500, sparse_pts: int = 600):
     xs = _curve_samples(max_shares, reserve, dense_pts=dense_pts, sparse_pts=sparse_pts)
-    return xs, buy_curve_np(xs), sell_curve_np(xs)
+    return xs, buy_curve_np(xs), sell_marginal_net_np(xs)
 
 
-# # --- Bonding Curves by Outcome (optimized) ---
+# --- Bonding Curves by Outcome ---
 st.subheader("🔁 Bonding Curves by Outcome")
-tabs = st.tabs(TOKENS)
+
+token_tabs = st.tabs(TOKENS)  # token-level tabs only
 
 # get latest reserves once
 with closing(get_conn()) as conn:
-    latest_reserves = {r["token"]: int(r["shares"]) for r in conn.execute(
-        "SELECT token, shares FROM reserves"
-    ).fetchall()}
+    latest_reserves = {
+        r["token"]: int(r["shares"])
+        for r in conn.execute("SELECT token, shares FROM reserves").fetchall()
+    }
 
-for token, tab in zip(TOKENS, tabs):
-    reserve = int(latest_reserves.get(token, 0))
+for token, token_tab in zip(TOKENS, token_tabs):
+    with token_tab:
+        reserve = int(latest_reserves.get(token, 0))
 
-    # point annotations at the *exact* reserve using your scalar functions
-    buy_price_now = float(buy_curve(reserve))
-    sell_price_now = float(sell_curve(reserve))
+        # One radio to switch sub-graphs (no nested tabs)
+        view = st.radio(
+            "View",
+            ["Buy Curve", "Sale Tax", "Effective Sell (Net)"],
+            horizontal=True,
+            key=f"view_{token}",
+        )
 
-    # smart-sampled, cached series around this reserve
-    xs, buy_vals, sell_vals = get_curve_series(MAX_SHARES, reserve)
+        if view == "Buy Curve":
+            # point annotations at current reserve
+            buy_price_now = float(buy_curve(reserve))
+            sell_net_now = float(current_marginal_sell_price_after_tax(reserve))  # if you have this
 
-    fig_curve = go.Figure()
-    fig_curve.add_trace(go.Scattergl(
-        x=xs, y=buy_vals, mode='lines', name='Buy Curve', line=dict(color='green'
-    )))
-    fig_curve.add_trace(go.Scattergl(
-        x=xs, y=sell_vals, mode='lines', name='Sell Curve', line=dict(color='red'
-    )))
+            # smart-sampled series (buy + sell curves)
+            xs, buy_vals, sell_net_vals = get_curve_series(MAX_SHARES, reserve)
 
-    # Buy point annotation
-    fig_curve.add_trace(go.Scatter(
-        x=[reserve], y=[buy_price_now], mode='markers+text',
-        name=f'{token} Buy Point',
-        text=[f"Shares: {reserve}<br>Price: {buy_price_now:.4f}"],
-        textposition="top right",
-        marker=dict(size=10, color='green'),
-        showlegend=False
-    ))
+            fig_curve = go.Figure()
+            fig_curve.add_trace(go.Scattergl(
+                x=xs, y=buy_vals, mode='lines', name='Buy Curve'
+            ))
+            # If you want to show the net sell (1-share) curve too, uncomment:
+            # fig_curve.add_trace(go.Scattergl(
+            #     x=xs, y=sell_net_vals, mode='lines', name='Sell (net, 1 share)'
+            # ))
 
-    # Sell point annotation
-    fig_curve.add_trace(go.Scatter(
-        x=[reserve], y=[sell_price_now], mode='markers+text',
-        name=f'{token} Sell Point',
-        text=[f"Shares: {reserve}<br>Price: {sell_price_now:.4f}"],
-        textposition="bottom right",
-        marker=dict(size=10, color='red'),
-        showlegend=False
-    ))
+            # Buy point annotation
+            fig_curve.add_trace(go.Scatter(
+                x=[reserve], y=[buy_price_now], mode='markers+text',
+                name=f'{token} Buy Point',
+                text=[f"Shares: {reserve}<br>Buy: {buy_price_now:.4f}"],
+                textposition="top right",
+                marker=dict(size=10),
+                showlegend=False
+            ))
 
-    # Dashed helper lines (use max with 0 to avoid negative bottoms in view)
-    y0_buy = max(0.0, min(buy_vals.min(), sell_vals.min(), buy_price_now, sell_price_now))
-    fig_curve.add_trace(go.Scatter(
-            x=[reserve, reserve], y=[y0_buy, buy_price_now], mode='lines',
-            line=dict(dash='dot'), showlegend=False
-        ))
-    fig_curve.add_trace(go.Scatter(
-            x=[xs.min(), reserve], y=[buy_price_now, buy_price_now], mode='lines',
-            line=dict(dash='dot'), showlegend=False
-        ))
-    fig_curve.add_trace(go.Scatter(
-            x=[reserve, reserve], y=[y0_buy, sell_price_now], mode='lines',
-            line=dict(dash='dot'), showlegend=False
-        ))
-    fig_curve.add_trace(go.Scatter(
-            x=[xs.min(), reserve], y=[sell_price_now, sell_price_now], mode='lines',
-            line=dict(dash='dot'), showlegend=False
-        ))
+            # helper lines
+            y0 = max(
+                0.0,
+                min(
+                    float(np.nanmin(buy_vals)),
+                    float(np.nanmin(sell_net_vals)),
+                    buy_price_now,
+                    sell_net_now,
+                )
+            )
+            fig_curve.add_trace(go.Scatter(
+                x=[reserve, reserve], y=[y0, buy_price_now],
+                mode='lines', line=dict(dash='dot'), showlegend=False
+            ))
+            fig_curve.add_trace(go.Scatter(
+                x=[xs.min(), reserve], y=[buy_price_now, buy_price_now],
+                mode='lines', line=dict(dash='dot'), showlegend=False
+            ))
 
-    fig_curve.update_layout(
-        title=f'{token} Price vs Shares',
-        xaxis_title='Shares',
-        yaxis_title='Price',
-        hovermode="x unified",
-        # uirevision="curves",  # keeps view on widget changes
-        # legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-    )
+            fig_curve.update_layout(
+                title=f'{token} — Buy vs Sell (net, 1 share)',
+                xaxis_title='Shares (reserve)',
+                yaxis_title='Price',
+                hovermode="x unified",
+            )
+            st.plotly_chart(fig_curve, use_container_width=True, key=f"chart_curve_{token}")
 
-    tab.plotly_chart(fig_curve, use_container_width=True, key=f"chart_curve_{token}")
+        elif view == "Sale Tax":
+            if reserve <= 0:
+                st.info("No circulating shares yet — tax curve will show once there is supply.")
+            else:
+                steps = 200
+                X = np.linspace(0.0, 1.0, steps + 1)
+                q_grid = (X * reserve).astype(int)
 
+                # vectorized tax rate for selling q out of current reserve
+                tax_y = _sale_tax_rate_vec(q_grid, reserve)
 
-st.divider()
+                fig_tax = go.Figure()
+                fig_tax.add_trace(go.Scattergl(
+                    x=X * 100.0, y=tax_y, mode='lines', marker=dict(size=10),  name='Sale Tax Rate'
+                ))
+                
+                fig_tax.update_layout(
+                title='Sale Tax vs % of Supply Sold (per order)',
+                xaxis_title='% of Current Supply Sold in Order',
+                yaxis_title='Tax Rate',
+                hovermode="x unified",   # nice unified hover; vertical guide
+                spikedistance=-1         # show spikes whenever the mouse is in the plot
+                )
+
+                # X spikes (to x-axis)
+                fig_tax.update_xaxes(
+                showspikes=True,
+                spikemode="across",      # draw across the plot area
+                spikesnap="cursor",      # follow the cursor position
+                spikedash="dot"          # dotted line
+                )
+
+                # Y spikes (to y-axis) + percent ticks
+                fig_tax.update_yaxes(
+                tickformat=".0%",
+                range=[0, 1],
+                showspikes=True,
+                spikemode="across",
+                spikesnap="cursor",
+                spikedash="dot"
+                )
+                # fig_tax.update_layout(
+                #     title='Sale Tax vs % of Supply Sold (per order)',
+                #     xaxis_title='% of Current Supply Sold in Order',
+                #     yaxis_title='Tax Rate',
+                #     hovermode="x unified"
+                # )
+                # # Format Y as percentages
+                # fig_tax.update_yaxes(tickformat=".0%", range=[0, 1])
+                st.plotly_chart(fig_tax, use_container_width=True, key=f"sale_tax_curve_{token}")
+
+        else:  # "Effective Sell (Net)"
+            C = reserve
+            st.markdown(f"**{token}**")
+            if C <= 0:
+                st.info("No circulating shares.")
+            else:
+                # up to 10% of supply (at least 1)
+                q_max = max(1, C // 10)
+                q_axis = np.linspace(1, q_max, 200).astype(int)
+
+                # gross proceeds via integral difference; then apply order-level tax
+                bd_C      = np.vectorize(buy_delta,  otypes=[float])(np.full_like(q_axis, C))
+                bd_C_minQ = np.vectorize(buy_delta,  otypes=[float])(C - q_axis)
+                gross     = bd_C - bd_C_minQ
+
+                tax = _sale_tax_rate_vec(q_axis, np.full_like(q_axis, C))
+                net = np.maximum(0.0, gross * (1.0 - tax))
+                avg_net = net / np.maximum(1, q_axis)
+
+                fig_eff = go.Figure()
+                fig_eff.add_trace(go.Scattergl(
+                    x=q_axis, y=avg_net, mode='lines', name=f'{token} Avg Net Sell Price'
+                ))
+                fig_eff.update_layout(
+                    title=f'Effective Avg Net Sell Price vs Quantity — {token}',
+                    xaxis_title='Quantity sold in a single order',
+                    yaxis_title='Avg Net Sell Price (USDC/share)',
+                    hovermode="x unified"
+                )
+                st.plotly_chart(fig_eff, use_container_width=True, key=f"effective_sell_{token}")
+
 
 # ===========================================================
 
@@ -1414,8 +1563,6 @@ else:
     txp["Time"] = pd.to_datetime(txp["Time"])
 
     with tab1:
-        # ---- Portfolio chart (with pricing mode) ----
-        price_mode = st.radio("Value holdings at:", ["Buy Price", "Mid Price", "Sell Price"], horizontal=True)
 
         # Reconstruct state over time (same as your current logic)
         reserves_state = {t: 0 for t in TOKENS}
@@ -1454,12 +1601,7 @@ else:
             if act == "Resolve":
                 prices = {t: 0.0 for t in TOKENS}
             else:
-                if price_mode == "Buy Price":
-                    prices = {t: buy_curve(reserves_state[t]) for t in TOKENS}
-                elif price_mode == "Sell Price":
-                    prices = {t: sell_curve(reserves_state[t]) for t in TOKENS}
-                else:
-                    prices = {t: buy_curve(reserves_state[t]) - sell_curve(reserves_state[t]) for t in TOKENS}
+                prices = {t: buy_curve(reserves_state[t]) for t in TOKENS}
 
             # Snapshot every user at this event time
             for u_id, s in user_state.items():
@@ -1470,7 +1612,7 @@ else:
         port_df = pd.DataFrame(records)
         fig_port = px.line(
             port_df, x="Time", y="PortfolioValue", color="User",
-            title=f"Portfolio Value Over Time ({price_mode})"
+            title=f"Portfolio Value Over Time (Buy Price)"
         )
         st.plotly_chart(fig_port, use_container_width=True, key="portfolio_value_chart")
 
@@ -1550,12 +1692,7 @@ if not txp.empty:
             # After resolution, holdings are worthless; prices treated as 0
             prices = {t: 0.0 for t in TOKENS}
         else:
-            if price_mode == "Buy Price":
-                prices = {t: buy_curve(reserves_state[t]) for t in TOKENS}
-            elif price_mode == "Sell Price":
-                prices = {t: sell_curve(reserves_state[t]) for t in TOKENS}
-            else:
-                prices = {t: buy_curve(reserves_state[t]) - sell_curve(reserves_state[t]) for t in TOKENS}
+            prices = {t: buy_curve(reserves_state[t]) for t in TOKENS}
 
         # Snapshot all users at this event time
         for u_id, s in user_state.items():
@@ -1563,61 +1700,82 @@ if not txp.empty:
             pnl = pv - STARTING_BALANCE
             records.append({"Time": r["Time"], "User": s["username"], "PortfolioValue": pv, "PnL": pnl})
 
+    port_df2 = pd.DataFrame(records)  # <- use a fresh DF for this block
     st.divider()
     st.subheader("🏆 Leaderboard (Portfolio, PnL & Points)")
 
-    # Latest portfolio snapshot per user
+    # Latest portfolio snapshot per user (use port_df2, not the earlier port_df from the tab)
     latest = (
-        port_df.sort_values("Time")
+        port_df2.sort_values("Time")
         .groupby("User", as_index=False)
         .last()[["User", "PortfolioValue", "PnL"]]
     )
 
-    # Exclude admin
+    # Exclude admin if you like
     latest = latest[latest["User"].str.lower() != "admin"]
     latest["PnL"] = latest["PortfolioValue"] - STARTING_BALANCE
 
-    # === Compute points ===
-    # 1) Volume points from transaction stream with phase multipliers
-    points_vol = compute_user_points(txp, users_df)  # txp & users_df already computed above
+    # ---- NEW: compute payout received at resolution from tx log ----
+    with closing(get_conn()) as conn:
+        payouts_df = pd.read_sql_query(
+            """
+            SELECT u.username AS User,
+                COALESCE(SUM(t.sell_delta), 0.0) AS Payout
+            FROM transactions t
+            JOIN users u ON u.id = t.user_id
+            WHERE t.action = 'Resolve'
+            GROUP BY u.username
+            """,
+            conn,
+        )
 
-    # 2) PnL points: only for positive PnL
+    latest = latest.merge(payouts_df, on="User", how="left")
+    latest["Payout"] = pd.to_numeric(latest["Payout"], errors="coerce").fillna(0.0)
+
+    # === Compute points === (unchanged)
+    points_vol = compute_user_points(txp, users_df)
     pnl_points = latest[["User", "PnL"]].copy()
     pnl_points["PnLPoints"] = pnl_points["PnL"].clip(lower=0.0) * PNL_POINTS_PER_USD
     pnl_points = pnl_points[["User", "PnLPoints"]]
-
-    # 3) Merge points
     pts = points_vol.merge(pnl_points, on="User", how="left")
     pts["PnLPoints"] = pts["PnLPoints"].fillna(0.0)
     pts["TotalPoints"] = pts["VolumePoints"] + pts["PnLPoints"]
 
-    # 4) Merge points into leaderboard
-    latest = latest.merge(pts[["User", "VolumePoints", "PnLPoints", "TotalPoints"]], on="User", how="left")
-    latest[["VolumePoints", "PnLPoints", "TotalPoints"]] = latest[["VolumePoints", "PnLPoints", "TotalPoints"]].fillna(0.0)
+    latest = latest.merge(
+        pts[["User", "VolumePoints", "PnLPoints", "TotalPoints"]],
+        on="User",
+        how="left",
+    ).fillna({"VolumePoints": 0.0, "PnLPoints": 0.0, "TotalPoints": 0.0})
 
-    # Sort leaderboard however you like; keep by PnL for now
-    latest = latest.sort_values("PnL", ascending=False)
+    # ---- UI: let you sort by Payout to verify equal payouts after resolution ----
+    metric_choice = st.radio(
+        "Leaderboard metric (sort by):", ["Portfolio Value", "PnL", "Payout"], horizontal=True, key="lb_metric"
+    )
+    sort_key = {"Portfolio Value": "PortfolioValue", "PnL": "PnL", "Payout": "Payout"}[metric_choice]
+    latest = latest.sort_values(sort_key, ascending=False)
 
-    if latest.empty:
-        st.info("No eligible users to display yet.")
-    else:
-        top_cols = st.columns(min(3, len(latest)))
-        for i, (_, row) in enumerate(latest.head(3).iterrows()):
-            with top_cols[i]:
-                delta_val = f"${row['PnL']:,.2f}" if row['PnL'] >= 0 else f"-${abs(row['PnL']):,.2f}"
-                st.metric(
-                    label=f"#{i+1} {row['User']}",
-                    value=f"${row['PortfolioValue']:,.2f}",
-                    delta=delta_val,
-                    border=True
-                )
-                # Optional: mini points callout
-                st.caption(f"Points: {row['TotalPoints']:,.0f}")
+    # Optional fairness check after resolution
+    if resolved_flag == 1 and not payouts_df.empty and payouts_df["Payout"].nunique() == 1:
+        st.caption("✅ All payouts are equal (same winning shares).")
 
-        st.dataframe(
-            latest[["User", "PortfolioValue", "PnL", "VolumePoints", "PnLPoints", "TotalPoints"]],
-            use_container_width=True
-        )
+    # Top cards + table (add Payout column)
+    top_cols = st.columns(min(3, len(latest)))
+    for i, (_, row) in enumerate(latest.head(3).iterrows()):
+        with top_cols[i]:
+            delta_val = f"${row['PnL']:,.2f}" if row['PnL'] >= 0 else f"-${abs(row['PnL']):,.2f}"
+            st.metric(
+                label=f"#{i+1} {row['User']}",
+                value=f"${row['PortfolioValue']:,.2f}",
+                delta=delta_val,
+                border=True
+            )
+            st.caption(f"Payout: ${row['Payout']:,.2f}")
+            st.caption(f"Points: {row['TotalPoints']:,.0f}")
+
+    st.dataframe(
+        latest[["User", "Payout", "PortfolioValue", "PnL", "VolumePoints", "PnLPoints", "TotalPoints"]],
+        use_container_width=True
+    )
 
 else:
     st.info("No transactions yet to compute portfolio history.")
