@@ -775,11 +775,18 @@ if 'user_id' in st.session_state and st.session_state.get("username") == "admin"
 
 
 # --- Admin: Resolve Parimutuel Market ---
+# resolved = int(m["resolved"] or 0)
 if 'user_id' in st.session_state and st.session_state.get("username") == "admin":
     st.sidebar.markdown("---")
     st.sidebar.subheader("Resolve Market")
+        # Fetch resolved state once to control the UI
+    with closing(get_conn()) as conn:
+        row = conn.execute("SELECT COALESCE(resolved, 0) AS r FROM market WHERE id=1").fetchone()
+    is_resolved = bool(row and int(row["r"]) == 1)
     winner = st.sidebar.selectbox("Winning outcome", TOKENS, key="winner_select")
-    if st.sidebar.button("Resolve Now", disabled=not winner, type="secondary"):
+
+    btn_disabled = (winner is None) or is_resolved
+    if st.sidebar.button("Resolve Now", disabled=btn_disabled , type="secondary"):
         # Do resolution
         with closing(get_conn()) as conn, conn:
             c = conn.cursor()
