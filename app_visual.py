@@ -609,7 +609,7 @@ def render_simulator():
                     if input_mode == "USDC":
                         quantity =qty_from_buy_usdc(reserve, usdc_input)
 
-                    buy_price, _, buy_amt_delta, _ = get_all_metrics(reserve, quantity)
+                    buy_price, _, buy_amt_delta, _, _= metrics_from_qty(reserve, quantity)
 
                     # Update both overall & token reserves
                     st.session_state.usdc_reserve += buy_amt_delta
@@ -643,7 +643,7 @@ def render_simulator():
                         quantity = qty_from_sell_usdc(reserve, usdc_input)
 
                     if reserve >= quantity:
-                        _, sell_price, _, sell_amt_delta = get_all_metrics(reserve, quantity)
+                        _, sell_price, _, sell_amt_delta = metrics_from_qty(reserve, quantity)
 
                         st.session_state.usdc_reserve -= sell_amt_delta
                         st.session_state[f'usdc_reserve_{token}'] -= sell_amt_delta
@@ -739,58 +739,173 @@ def render_simulator():
         x_lo, x_hi = 0, int(MAX_SHARES)
 
     for token, tab in zip(OUTCOMES, tabs):
-        reserve = outcome_reserves.get(token, 0)
-        reserve_clamped = int(np.clip(reserve, x_lo, x_hi))
+        with tab:
+            reserve = outcome_reserves.get(token, 0)
+            reserve_clamped = int(np.clip(reserve, x_lo, x_hi))
 
-        # smart-sampled, cached series for THIS curve set & outcome
-        xs, buy_vals, sell_vals = get_curve_series(
-            curve_key=f"{curve_choice}:{token}",
-            max_shares=int(MAX_SHARES),
-            reserve=reserve_clamped,
-            x_lo=x_lo,
-            x_hi=x_hi,
-            dense_pts=1200,
-            sparse_pts=500,
-        )
+            # smart-sampled, cached series for THIS curve set & outcome
+            xs, buy_vals, sell_vals = get_curve_series(
+                curve_key=f"{curve_choice}:{token}",
+                max_shares=int(MAX_SHARES),
+                reserve=reserve_clamped,
+                x_lo=x_lo,
+                x_hi=x_hi,
+                dense_pts=1200,
+                sparse_pts=500,
+            )
+            
+            # One radio to switch sub-graphs (no nested tabs)
+            view = st.radio(
+                "View",
+                CURVE_VIEW_MODES,
+                horizontal=True,
+                key=f"view_{token}",
+            )
+            if view == "Buy Curve":
+                # point annotations at current reserve
+                buy_price_now = float(buy_curve(reserve))
+                sell_net_now = float(current_marginal_sell_price_after_tax(reserve))  # if you have this
 
-        # prices at the exact reserve using active curve funcs
-        pb = float(buy_curve(reserve))
-        # ps = float(sell__tax_curve(reserve))
+                # smart-sampled series (buy + sell curves)
+                x_lo, x_hi = 0, int(MAX_SHARES)
+                xs, buy_vals, sell_net_vals = get_curve_series(
+                        curve_key=curve_choice,
+                            max_shares=int(MAX_SHARES),
+                            reserve=reserve,
+                            x_lo=x_lo, x_hi=x_hi,
+                            dense_pts=1500, sparse_pts=600
+                                )
 
-        # plot
-        fig_curve = go.Figure()
-        fig_curve.add_trace(go.Scattergl(x=xs, y=buy_vals, mode='lines', name='Buy Curve'))
-        # fig_curve.add_trace(go.Scattergl(x=xs, y=sell_vals, mode='lines', name='Sell Curve'))
+                fig_curve = go.Figure()
+                fig_curve.add_trace(go.Scattergl(
+                    x=xs, y=buy_vals, mode='lines', name='Buy Curve'
+                ))
+                # If you want to show the net sell (1-share) curve too, uncomment:
+                # fig_curve.add_trace(go.Scattergl(
+                #     x=xs, y=sell_net_vals, mode='lines', name='Sell (net, 1 share)'
+                # ))
 
-        # marker annotations
-        fig_curve.add_trace(go.Scatter(
-            x=[reserve_clamped], y=[pb], mode='markers+text', name='Buy Point',
-            text=[f"Shares: {reserve}<br>Price: {pb:.4f}"], textposition="top right",
-            marker=dict(size=10), showlegend=False
-        ))
+                # Buy point annotation
+                fig_curve.add_trace(go.Scatter(
+                    x=[reserve], y=[buy_price_now], mode='markers+text',
+                    name=f'{token} Buy Point',
+                    text=[f"Shares: {reserve}<br>Buy: {buy_price_now:.4f}"],
+                    textposition="top right",
+                    marker=dict(size=10),
+                    showlegend=False
+                ))
 
-        # crosshair helpers
-        y_floor = float(min(np.nanmin(buy_vals), np.nanmin(sell_vals), 0.0))
-        fig_curve.add_trace(go.Scatter(x=[reserve_clamped, reserve_clamped], y=[y_floor, pb],
-                                    mode='lines', line=dict(dash='dot'), showlegend=False))
-        fig_curve.add_trace(go.Scatter(x=[x_lo, reserve_clamped], y=[pb, pb],
-                                    mode='lines', line=dict(dash='dot'), showlegend=False))
+                # helper lines
+                y0 = max(
+                    0.0,
+                    min(
+                        float(np.nanmin(buy_vals)),
+                        float(np.nanmin(sell_net_vals)),
+                        buy_price_now,
+                        sell_net_now,
+                    )
+                )
+                fig_curve.add_trace(go.Scatter(
+                    x=[reserve, reserve], y=[y0, buy_price_now],
+                    mode='lines', line=dict(dash='dot'), showlegend=False
+                ))
+                fig_curve.add_trace(go.Scatter(
+                    x=[xs.min(), reserve], y=[buy_price_now, buy_price_now],
+                    mode='lines', line=dict(dash='dot'), showlegend=False
+                ))
 
-        fig_curve.update_layout(
-            title=f'{token} Price vs Shares — {curve_choice}',
-            xaxis_title='Shares',
-            yaxis_title='Price',
-            hovermode="x unified",
-        )
+                fig_curve.update_layout(
+                    title=f'{token} — Buy vs Sell (net, 1 share)',
+                    xaxis_title='Shares (reserve)',
+                    yaxis_title='Price',
+                    hovermode="x unified",
+                )
 
-        # respect custom axes
-        if x_mode == "Custom":
-            fig_curve.update_xaxes(range=[x_lo, x_hi])
-        if y_mode == "Custom":
-            fig_curve.update_yaxes(range=[float(y_min), float(y_max)])
+                st.plotly_chart(fig_curve, use_container_width=True, key=f"buy_curve_sim_{token}")
 
-        tab.plotly_chart(fig_curve, use_container_width=True, key=f"chart_curve_{token}")
+            elif view == "Sell Spread":
+                if reserve <= 0:
+                    st.info("No circulating shares yet — Sell spread curve will show once there is supply.")
+                else:
+                    steps = 200
+                    X = np.linspace(0.0, 1.0, steps + 1)
+                    q_grid = (X * reserve).astype(int)
 
+                    # vectorized tax rate for selling q out of current reserve
+                    tax_y = _sale_tax_rate_vec(q_grid, reserve)
+
+                    fig_tax = go.Figure()
+                    fig_tax.add_trace(go.Scattergl(
+                        x=X * 100.0, y=tax_y, mode='lines', marker=dict(size=10),  name='Sale Tax Rate'
+                    ))
+                    
+                    fig_tax.update_layout(
+                    title='Sell Spread vs % of Supply Sold (per order)',
+                    xaxis_title='% of Current Supply Sold in Order',
+                    yaxis_title='Spread Rate',
+                    hovermode="x unified",   # nice unified hover; vertical guide
+                    spikedistance=-1         # show spikes whenever the mouse is in the plot
+                    )
+
+                    # X spikes (to x-axis)
+                    fig_tax.update_xaxes(
+                    showspikes=True,
+                    spikemode="across",      # draw across the plot area
+                    spikesnap="cursor",      # follow the cursor position
+                    spikedash="dot"          # dotted line
+                    )
+
+                    # Y spikes (to y-axis) + percent ticks
+                    fig_tax.update_yaxes(
+                    tickformat=".0%",
+                    range=[0, 1],
+                    showspikes=True,
+                    spikemode="across",
+                    spikesnap="cursor",
+                    spikedash="dot"
+                    )
+                    # fig_tax.update_layout(
+                    #     title='Sale Tax vs % of Supply Sold (per order)',
+                    #     xaxis_title='% of Current Supply Sold in Order',
+                    #     yaxis_title='Tax Rate',
+                    #     hovermode="x unified"
+                    # )
+                    # # Format Y as percentages
+                    # fig_tax.update_yaxes(tickformat=".0%", range=[0, 1])
+                    st.plotly_chart(fig_tax, use_container_width=True, key=f"sell_spread_curve_{token}")
+
+            else:  # "Effective Sell (Net)"
+                C = reserve
+                st.markdown(f"**{token}**")
+                if C <= 0:
+                    st.info("No circulating shares.")
+                else:
+                    # up to 10% of supply (at least 1)
+                    q_max = max(1, C // 10)
+                    q_axis = np.linspace(1, q_max, 200).astype(int)
+
+                    # gross proceeds via integral difference; then apply order-level tax
+                    bd_C      = np.vectorize(buy_delta,  otypes=[float])(np.full_like(q_axis, C))
+                    bd_C_minQ = np.vectorize(buy_delta,  otypes=[float])(C - q_axis)
+                    gross     = bd_C - bd_C_minQ
+
+                    tax = _sale_tax_rate_vec(q_axis, np.full_like(q_axis, C))
+                    net = np.maximum(0.0, gross * (1.0 - tax))
+                    avg_net = net / np.maximum(1, q_axis)
+
+                    fig_eff = go.Figure()
+                    fig_eff.add_trace(go.Scattergl(
+                        x=q_axis, y=avg_net, mode='lines', name=f'{token} Avg Net Sell Price'
+                    ))
+                    fig_eff.update_layout(
+                        title=f'Effective Avg Net Sell Price vs Quantity — {token}',
+                        xaxis_title='Quantity sold in a single order',
+                        yaxis_title='Avg Net Sell Price (USDC/share)',
+                        hovermode="x unified"
+                    )
+                    st.plotly_chart(fig_eff, use_container_width=True, key=f"effective_sell_{token}")
+
+   
     st.divider()
 
 
