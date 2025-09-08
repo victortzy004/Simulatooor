@@ -15,11 +15,11 @@ from contextlib import closing
 DEFAULT_DECIMAL_PRECISION = 2
 BASE_EPSILON = 1e-4
 MARKET_DURATION_DAYS = 5
-END_TS = "2025-09-07 00:00"
+END_TS = "2025-09-15 00:00"
 DB_PATH = "app.db"
 MAX_SHARES = 5000000 #5M
 STARTING_BALANCE = 50000.0 #50k
-MARKET_QUESTION = "Price of Ethereum by 7th Sept?"
+MARKET_QUESTION = "Price of Ethereum by 15th Sept?"
 RESOLUTION_NOTE = (
     'This market will resolve according to the final "Close" price of the '
     'Binance 1-minute candle for ETH/USDT at 12:00 UTC.'
