@@ -1,6 +1,6 @@
 # file: app.py
 import streamlit as st
-from datetime import datetime, timedelta
+from datetime import datetime, date, timedelta
 import pandas as pd
 import numpy as np
 import math
@@ -19,23 +19,20 @@ END_TS = "2025-09-15 00:00"
 DB_PATH = "app.db"
 MAX_SHARES = 5000000 #5M
 STARTING_BALANCE = 50000.0 #50k
-MARKET_QUESTION = "Price of Ethereum by 15th Sept?"
-RESOLUTION_NOTE = (
-    'This market will resolve according to the final "Close" price of the '
-    'Binance 1-minute candle for ETH/USDT at 12:00 UTC.'
-)
-TOKENS = ["<4300", "4300-4700", ">4700"]
-# MARKET_QUESTION = "Will the total crypto market cap be larger than NVIDIA's market cap by the 7th Sept?"
 
-# RESOLUTION_NOTE = (
-#     'This market will resolve to "YES" if the total cryptocurrency market capitalization '
-#     'as reported by CoinGecko is greater than the market capitalization of NVIDIA (NVDA) '
-#     'as reported by Yahoo Finance at the resolution timestamp. '
-#     'It will resolve to "NO" otherwise. '
-#     'If either source is unavailable or shows materially inconsistent data, the admins will use reasonable judgment to determine resolution.'
-# )
-# TOKENS = ["<4200", "4200-4600", ">4600"]
-# TOKENS = ["YES", "NO"] 
+
+MARKET_QUESTION = "Will MicroStrategy purchase Bitcoin September 9-15?"
+START_DATE = date(2025, 9, 9)   # change as needed
+END_DATE   = date(2025, 9, 15)
+RESOLUTION_NOTE = (
+    f'This market will resolve to "Yes" if MicroStrategy Incorporated announces that they have acquired '
+    f'additional Bitcoin between 12:00 AM ET on {START_DATE:%B} {START_DATE.day}, {START_DATE.year} '
+    f'and 11:59 PM ET on {END_DATE:%B} {END_DATE.day}, {END_DATE.year}. '
+    f'Otherwise, it will resolve to "No". '
+    f'Resolution will be based on official information from MicroStrategy or Michael Saylor. '
+)
+TOKENS = ["YES", "NO"]
+
 
 # Whitelisted usernames and admin reset control
 WHITELIST = {"admin", "rui", "haoye", "leo", "steve", "wenbo", "sam", "sharmaine", "mariam", "henry", "guard", "victor", "toby"}
@@ -932,7 +929,7 @@ if market_row:
                     </p>
                     <h5>🔗 Resolution Sources/Resources:</h5>
                     <ul>
-                        <li><a href="https://www.binance.com/en/trade/ETH_USDT?type=spot/" target="_blank">Binance International: ETH/USDT Spot Market</a></li>
+                        <li><a href="https://www.strategy.com/purchases" target="_blank">MicroStrategy Purchases</a></li>
                     </ul>
                 </div>
                 """,
@@ -1087,7 +1084,7 @@ if user_id is not None:
     pnl_df = pd.DataFrame(pnl_rows)
 
     st.markdown("**Per-Token Position & PnL**")
-    st.dataframe(pnl_df, use_container_width=True)
+    st.dataframe(pnl_df, width='stretch')
     st.divider()
 
     
@@ -1319,7 +1316,7 @@ for col in float_cols:
 
 if not tx.empty:    
     st.subheader("Transaction Log")
-    st.dataframe(tx_display, use_container_width=True)
+    st.dataframe(tx_display, width='stretch')
     st.divider()
 
     # Payout/Share Trend (recomputed from shares across tokens at each tx)
@@ -1341,8 +1338,7 @@ if not tx.empty:
     ps_df = pd.DataFrame(shares_timeline)
     fig = px.line(ps_df, x="Time", y="Payout/Share", color="Outcome", markers=True,
               title="Payout/Share Over Time")
-    st.plotly_chart(fig, use_container_width=True, key="chart_payout_share")
-    # st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch', key="chart_payout_share")
     st.divider()
 
     # Hide for now
@@ -1360,7 +1356,7 @@ if not tx.empty:
     # shares_df = pd.DataFrame(rows)
     # m = shares_df.melt(id_vars='Time', var_name='Token', value_name='Reserve')
     # fig_stack = px.area(m, x="Time", y="Reserve", color="Token", title="Token Shares vs. Time")
-    # st.plotly_chart(fig_stack, use_container_width=True)
+    # st.plotly_chart(fig_stack, width='stretch')
 
 # ===========================================================
 
@@ -1489,7 +1485,7 @@ for token, token_tab in zip(TOKENS, token_tabs):
                 yaxis_title='Price',
                 hovermode="x unified",
             )
-            st.plotly_chart(fig_curve, use_container_width=True, key=f"chart_curve_{token}")
+            st.plotly_chart(fig_curve, width='stretch', key=f"chart_curve_{token}")
 
         elif view == "Sale Tax":
             if reserve <= 0:
@@ -1540,7 +1536,7 @@ for token, token_tab in zip(TOKENS, token_tabs):
                 # )
                 # # Format Y as percentages
                 # fig_tax.update_yaxes(tickformat=".0%", range=[0, 1])
-                st.plotly_chart(fig_tax, use_container_width=True, key=f"sale_tax_curve_{token}")
+                st.plotly_chart(fig_tax, width='stretch', key=f"sale_tax_curve_{token}")
 
         else:  # "Effective Sell (Net)"
             C = reserve
@@ -1571,7 +1567,7 @@ for token, token_tab in zip(TOKENS, token_tabs):
                     yaxis_title='Avg Net Sell Price (USDC/share)',
                     hovermode="x unified"
                 )
-                st.plotly_chart(fig_eff, use_container_width=True, key=f"effective_sell_{token}")
+                st.plotly_chart(fig_eff, width='stretch', key=f"effective_sell_{token}")
 
 
 # ===========================================================
@@ -1650,7 +1646,7 @@ else:
             port_df, x="Time", y="PortfolioValue", color="User",
             title=f"Portfolio Value Over Time (Buy Price)"
         )
-        st.plotly_chart(fig_port, use_container_width=True, key="portfolio_value_chart")
+        st.plotly_chart(fig_port, width='stretch', key="portfolio_value_chart")
 
     with tab2:
         # ---- Points chart ----
@@ -1670,7 +1666,7 @@ else:
                 title="Total Points Over Time (Cumulative Volume + Instant PnL Points)",
                 line_group="User",
             )
-            st.plotly_chart(fig_pts, use_container_width=True, key='points_chart')
+            st.plotly_chart(fig_pts, width='stretch', key='points_chart')
 
  # ===========================================================
 # Historical portfolio visualization (toggle between buy and sell price)
@@ -1810,7 +1806,7 @@ if not txp.empty:
 
     st.dataframe(
         latest[["User", "Payout", "PortfolioValue", "PnL", "VolumePoints", "PnLPoints", "TotalPoints"]],
-        use_container_width=True
+        width='stretch'
     )
 
 else:
