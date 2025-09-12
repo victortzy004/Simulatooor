@@ -16,11 +16,12 @@ from contextlib import closing
 DEFAULT_DECIMAL_PRECISION = 2
 BASE_EPSILON = 1e-4
 MARKET_DURATION_DAYS = 5
-END_TS = "2025-09-15 00:00"
+END_TS = "2025-09-19 00:00"
 DB_PATH = "app.db"
 MAX_SHARES = 5000000 #5M
 STARTING_BALANCE = 100000.0 #50k
-
+# --- Per-user starting balances ---
+WEN_STARTING_BALANCE = 5_000_000.0  # exclusive for 'wen'
 
 MARKET_QUESTION = "Will ZXBT agent post an image that has an animal inside by Sept 19?"
 # START_DATE = date(2025, 9, 9)   # change as needed
@@ -53,7 +54,7 @@ Otherwise, resolves to "NO".</p>
 TOKENS = ["YES", "NO"]
 
 # Whitelisted usernames and admin reset control
-WHITELIST = {"admin", "rui", "haoye", "leo", "steve", "wenbo", "sam", "sharmaine", "mariam", "henry", "guard", "victor", "toby", "jesse", "john", "wong"}
+WHITELIST = {"admin", "rui", "haoye", "leo", "steve", "wen", "sam", "sharmaine", "mariam", "henry", "guard", "victor", "toby", "jesse", "john", "wong"}
 
 # Inflection Points
 EARLY_QUANTITY_POINT = 270
@@ -261,6 +262,16 @@ def format_usdc_compact(value: float) -> str:
 
     # < 1,000 — show standard money
     return f"{sign}${v:,.2f}"
+
+
+def starting_balance_for_username(username: str) -> float:
+    return WEN_STARTING_BALANCE if (username and username.lower() == "wen") else STARTING_BALANCE
+
+def user_starting_balance_map() -> dict[int, float]:
+    """id -> starting balance (per username rule)"""
+    with closing(get_conn()) as conn:
+        rows = conn.execute("SELECT id, username FROM users").fetchall()
+    return {int(r["id"]): starting_balance_for_username(str(r["username"])) for r in rows}
 
 # ===========================================================
 # DB Helpers
@@ -574,7 +585,8 @@ def compute_points_timeline(txp: pd.DataFrame, users_df: pd.DataFrame) -> pd.Dat
         ts = r["Time"]
         for u_id, s in user_state.items():
             pv = s["balance"] + sum(s["holdings"][t] * prices[t] for t in TOKENS)
-            pnl_instant = max(pv - STARTING_BALANCE, 0.0)
+            # pnl_instant = max(pv - STARTING_BALANCE, 0.0)
+            pnl_instant = max(pv - baseline_by_id[u_id], 0.0)
             pnl_points = pnl_instant * PNL_POINTS_PER_USD
             total_points = vol_points[u_id] + pnl_points
 
@@ -607,18 +619,20 @@ def latest_tx_epoch() -> int:
         r = conn.execute("SELECT COALESCE(MAX(ts),'1970-01-01T00:00:00') AS mx FROM transactions").fetchone()
     return int(pd.to_datetime(r["mx"]).value)  # nanoseconds
 
-# cache_key = latest_tx_epoch()
-# txp, users_df = load_tx_and_users(cache_key)
 
 def compute_points_timeline_fast(txp: pd.DataFrame, users_df: pd.DataFrame) -> pd.DataFrame:
     if txp.empty:
         return pd.DataFrame(columns=["Time","User","VolumePointsCum","PnLPointsInstant","TotalPoints"])
 
+    starting_balances = np.array(
+    [starting_balance_for_username(u.username) for _, u in users_df.iterrows()],
+    dtype=np.float64
+    )
     U = len(users_df); T = len(TOKENS)
     uid_index = {int(u.id): i for _, u in users_df.iterrows()}
     token_index = {t: i for i, t in enumerate(TOKENS)}
 
-    balances = np.full(U, STARTING_BALANCE, dtype=np.float64)
+    balances = starting_balances.copy()
     holdings = np.zeros((U, T), dtype=np.int64)
     reserves = np.zeros(T, dtype=np.int64)
     vol_points = np.zeros(U, dtype=np.float64)
@@ -665,7 +679,7 @@ def compute_points_timeline_fast(txp: pd.DataFrame, users_df: pd.DataFrame) -> p
 
         # vectorized PV + points
         pv = balances + (holdings @ prices)
-        pnl_points = np.maximum(pv - STARTING_BALANCE, 0.0) * PNL_POINTS_PER_USD
+        pnl_points = np.maximum(pv - starting_balances, 0.0) * PNL_POINTS_PER_USD
         total = vol_points + pnl_points
 
         # append as one block
@@ -704,9 +718,11 @@ with st.sidebar:
                     if cnt >= 20:
                         st.error("Max 20 users reached. Try another time.")
                         st.stop()
+
+                    initial_bal = starting_balance_for_username(username_input)
                     c.execute(
                         "INSERT INTO users(username,balance,created_at) VALUES(?,?,?)",
-                        (username_input, STARTING_BALANCE, datetime.utcnow().isoformat()),
+                        (username_input, initial_bal, datetime.utcnow().isoformat()),
                     )
                     user_id = c.lastrowid
                     for t in TOKENS:
@@ -750,8 +766,8 @@ if 'user_id' in st.session_state and st.session_state.get("username") == "admin"
         with closing(get_conn()) as conn, conn:
             c = conn.cursor()
             start = datetime.utcnow()
-            end = start + timedelta(days=MARKET_DURATION_DAYS)
-            # end = END_TS
+            # end = start + timedelta(days=MARKET_DURATION_DAYS)
+            end = END_TS
             # reset market window + clear resolution flags
             c.execute("""
                 UPDATE market
@@ -780,7 +796,11 @@ if 'user_id' in st.session_state and st.session_state.get("username") == "admin"
                         del st.session_state[k]
             else:
                 # keep users; reset balances/holdings and clear txs
-                c.execute("UPDATE users SET balance=?", (STARTING_BALANCE,))
+                c.execute(
+                    "UPDATE users "
+                    "SET balance = CASE WHEN LOWER(username)='wen' THEN ? ELSE ? END",
+                    (WEN_STARTING_BALANCE, STARTING_BALANCE)
+                )
                 c.execute("UPDATE holdings SET shares=0")
                 c.execute("DELETE FROM transactions")
 
@@ -1026,7 +1046,8 @@ if 'user_id' in st.session_state:
                     my_vol_points = float(me_row["VolumePoints"].iloc[0])
 
             # PnL points use *current* portfolio snapshot in the account card
-            my_pnl_now = max(portfolio_value - STARTING_BALANCE, 0.0)
+            my_baseline = starting_balance_for_username(st.session_state.get("username",""))
+            my_pnl_now = max(portfolio_value - my_baseline, 0.0)
             my_pnl_points = my_pnl_now * PNL_POINTS_PER_USD
 
             my_total_points = my_vol_points + my_pnl_points
@@ -1359,22 +1380,6 @@ if not tx.empty:
     st.plotly_chart(fig, key="chart_payout_share")
     st.divider()
 
-    # Hide for now
-    # # Circulating Shares Over Time
-    # st.subheader("📊 Circulating Token Shares Over Time")
-    # rows = []
-    # running = {t: 0 for t in TOKENS}
-    # for _, r in tx.iterrows():
-    #     tkn, act, q = r['Outcome'], r['Action'], int(r['Quantity'])
-    #     if act == 'Buy':
-    #         running[tkn] += q
-    #     else:
-    #         running[tkn] -= q
-    #     rows.append({'Time': pd.to_datetime(r['Time']), **{f'Shares {t}': running[t] for t in TOKENS}})
-    # shares_df = pd.DataFrame(rows)
-    # m = shares_df.melt(id_vars='Time', var_name='Token', value_name='Reserve')
-    # fig_stack = px.area(m, x="Time", y="Reserve", color="Token", title="Token Shares vs. Time")
-    # st.plotly_chart(fig_stack, width='stretch')
 
 # ===========================================================
 
@@ -1546,14 +1551,7 @@ for token, token_tab in zip(TOKENS, token_tabs):
                 spikesnap="cursor",
                 spikedash="dot"
                 )
-                # fig_tax.update_layout(
-                #     title='Sale Tax vs % of Supply Sold (per order)',
-                #     xaxis_title='% of Current Supply Sold in Order',
-                #     yaxis_title='Tax Rate',
-                #     hovermode="x unified"
-                # )
-                # # Format Y as percentages
-                # fig_tax.update_yaxes(tickformat=".0%", range=[0, 1])
+
                 st.plotly_chart(fig_tax, key=f"sale_tax_curve_{token}")
 
         else:  # "Effective Sell (Net)"
@@ -1616,8 +1614,10 @@ else:
 
         # Reconstruct state over time (same as your current logic)
         reserves_state = {t: 0 for t in TOKENS}
+
+        baseline_by_id = {int(r.id): starting_balance_for_username(r.username) for _, r in users_df.iterrows()}
         user_state = {
-            int(r.id): {"username": r.username, "balance": STARTING_BALANCE, "holdings": {t: 0 for t in TOKENS}}
+            int(r.id): {"username": r.username, "balance": baseline_by_id[int(r.id)], "holdings": {t: 0 for t in TOKENS}}
             for _, r in users_df.iterrows()
         }
         records = []
@@ -1653,10 +1653,11 @@ else:
             else:
                 prices = {t: buy_curve(reserves_state[t]) for t in TOKENS}
 
+            baseline_by_id = {int(r.id): starting_balance_for_username(r.username) for _, r in users_df.iterrows()}
             # Snapshot every user at this event time
             for u_id, s in user_state.items():
                 pv = s["balance"] + sum(s["holdings"][t] * prices[t] for t in TOKENS)
-                pnl = pv - STARTING_BALANCE
+                pnl = pv - baseline_by_id[u_id]
                 records.append({"Time": r["Time"], "User": s["username"], "PortfolioValue": pv, "PnL": pnl})
 
         port_df = pd.DataFrame(records)
@@ -1701,10 +1702,12 @@ with closing(get_conn()) as conn:
 
 if not txp.empty:
     reserves_state = {t: 0 for t in TOKENS}
+    baseline_by_id = {int(r.id): starting_balance_for_username(r.username) for _, r in users_df.iterrows()}
     user_state = {
-        int(r.id): {"username": r.username, "balance": STARTING_BALANCE, "holdings": {t: 0 for t in TOKENS}}
+        int(r.id): {"username": r.username, "balance": baseline_by_id[int(r.id)], "holdings": {t: 0 for t in TOKENS}}
         for _, r in users_df.iterrows()
     }
+
     records = []
 
     txp["Time"] = pd.to_datetime(txp["Time"])
@@ -1744,10 +1747,12 @@ if not txp.empty:
         else:
             prices = {t: buy_curve(reserves_state[t]) for t in TOKENS}
 
+        baseline_by_id = {int(r.id): starting_balance_for_username(r.username) for _, r in users_df.iterrows()}
+
         # Snapshot all users at this event time
         for u_id, s in user_state.items():
             pv = s["balance"] + sum(s["holdings"][t] * prices[t] for t in TOKENS)
-            pnl = pv - STARTING_BALANCE
+            pnl = pv - baseline_by_id[u_id]
             records.append({"Time": r["Time"], "User": s["username"], "PortfolioValue": pv, "PnL": pnl})
 
     port_df2 = pd.DataFrame(records)  # <- use a fresh DF for this block
@@ -1763,7 +1768,10 @@ if not txp.empty:
 
     # Exclude admin if you like
     latest = latest[latest["User"].str.lower() != "admin"]
-    latest["PnL"] = latest["PortfolioValue"] - STARTING_BALANCE
+    latest["PnL"] = latest.apply(
+    lambda r: r["PortfolioValue"] - starting_balance_for_username(str(r["User"])),
+    axis=1
+)
 
     # ---- NEW: compute payout received at resolution from tx log ----
     with closing(get_conn()) as conn:
