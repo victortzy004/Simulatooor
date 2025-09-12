@@ -767,7 +767,7 @@ if 'user_id' in st.session_state and st.session_state.get("username") == "admin"
             c = conn.cursor()
             start = datetime.utcnow()
             # end = start + timedelta(days=MARKET_DURATION_DAYS)
-            end = END_TS
+            end = datetime.fromisoformat(END_TS)
             # reset market window + clear resolution flags
             c.execute("""
                 UPDATE market
