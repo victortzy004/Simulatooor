@@ -1,6 +1,7 @@
 # file: app.py
 import streamlit as st
-from datetime import datetime, date, timedelta
+from textwrap import dedent
+from datetime import datetime, timezone, timedelta
 import pandas as pd
 import numpy as np
 import math
@@ -18,24 +19,41 @@ MARKET_DURATION_DAYS = 5
 END_TS = "2025-09-15 00:00"
 DB_PATH = "app.db"
 MAX_SHARES = 5000000 #5M
-STARTING_BALANCE = 50000.0 #50k
+STARTING_BALANCE = 100000.0 #50k
 
 
-MARKET_QUESTION = "Will MicroStrategy purchase Bitcoin September 9-15?"
-START_DATE = date(2025, 9, 9)   # change as needed
-END_DATE   = date(2025, 9, 15)
-RESOLUTION_NOTE = (
-    f'This market will resolve to "Yes" if MicroStrategy Incorporated announces that they have acquired '
-    f'additional Bitcoin between 12:00 AM ET on {START_DATE:%B} {START_DATE.day}, {START_DATE.year} '
-    f'and 11:59 PM ET on {END_DATE:%B} {END_DATE.day}, {END_DATE.year}. '
-    f'Otherwise, it will resolve to "No". '
-    f'Resolution will be based on official information from MicroStrategy or Michael Saylor. '
-)
+MARKET_QUESTION = "Will ZXBT agent post an image that has an animal inside by Sept 19?"
+# START_DATE = date(2025, 9, 9)   # change as needed
+# END_DATE   = date(2025, 9, 15)
+# RESOLUTION_NOTE = (
+#     f'This market will resolve to "Yes" if MicroStrategy Incorporated announces that they have acquired '
+#     f'additional Bitcoin between 12:00 AM ET on {START_DATE:%B} {START_DATE.day}, {START_DATE.year} '
+#     f'and 11:59 PM ET on {END_DATE:%B} {END_DATE.day}, {END_DATE.year}. '
+#     f'Otherwise, it will resolve to "No". '
+#     f'Resolution will be based on official information from MicroStrategy or Michael Saylor. '
+# )
+
+AGENT_NAME   = "ZXBT"
+DEADLINE_UTC = datetime(2025, 9, 19, 23, 59, 59, tzinfo=timezone.utc)
+
+RESOLUTION_NOTE = dedent(f"""
+<p>Resolves to "YES" if the {AGENT_NAME} agent publicly posts an image on X
+(photo, illustration, or AI-generated) that visibly contains a non-human animal
+on or before {DEADLINE_UTC:%Y-%m-%d %H:%M:%S} UTC on any official channel.
+Otherwise, resolves to "NO".</p>
+
+<p><strong>Clarifications</strong></p>
+<ul>
+  <li><strong>Publicly posts</strong> = a public post made by the agent's official account(s).</li>
+  <li>Reposts/retweets count only if posted by the agent account itself.</li>
+  <li>Pure text screenshots with no visible animal do not count.</li>
+</ul>
+""").strip()
+
 TOKENS = ["YES", "NO"]
 
-
 # Whitelisted usernames and admin reset control
-WHITELIST = {"admin", "rui", "haoye", "leo", "steve", "wenbo", "sam", "sharmaine", "mariam", "henry", "guard", "victor", "toby"}
+WHITELIST = {"admin", "rui", "haoye", "leo", "steve", "wenbo", "sam", "sharmaine", "mariam", "henry", "guard", "victor", "toby", "jesse"}
 
 # Inflection Points
 EARLY_QUANTITY_POINT = 270
@@ -929,7 +947,7 @@ if market_row:
                     </p>
                     <h5>🔗 Resolution Sources/Resources:</h5>
                     <ul>
-                        <li><a href="https://www.strategy.com/purchases" target="_blank">MicroStrategy Purchases</a></li>
+                        <li><a href="https://x.com/zxbt_agent" target="_blank">ZXBT Agent X Handle</a></li>
                     </ul>
                 </div>
                 """,
@@ -1084,7 +1102,7 @@ if user_id is not None:
     pnl_df = pd.DataFrame(pnl_rows)
 
     st.markdown("**Per-Token Position & PnL**")
-    st.dataframe(pnl_df, width='stretch')
+    st.dataframe(pnl_df)
     st.divider()
 
     
@@ -1316,7 +1334,7 @@ for col in float_cols:
 
 if not tx.empty:    
     st.subheader("Transaction Log")
-    st.dataframe(tx_display, width='stretch')
+    st.dataframe(tx_display)
     st.divider()
 
     # Payout/Share Trend (recomputed from shares across tokens at each tx)
@@ -1338,7 +1356,7 @@ if not tx.empty:
     ps_df = pd.DataFrame(shares_timeline)
     fig = px.line(ps_df, x="Time", y="Payout/Share", color="Outcome", markers=True,
               title="Payout/Share Over Time")
-    st.plotly_chart(fig, width='stretch', key="chart_payout_share")
+    st.plotly_chart(fig, key="chart_payout_share")
     st.divider()
 
     # Hide for now
@@ -1485,7 +1503,7 @@ for token, token_tab in zip(TOKENS, token_tabs):
                 yaxis_title='Price',
                 hovermode="x unified",
             )
-            st.plotly_chart(fig_curve, width='stretch', key=f"chart_curve_{token}")
+            st.plotly_chart(fig_curve, key=f"chart_curve_{token}")
 
         elif view == "Sale Tax":
             if reserve <= 0:
@@ -1536,7 +1554,7 @@ for token, token_tab in zip(TOKENS, token_tabs):
                 # )
                 # # Format Y as percentages
                 # fig_tax.update_yaxes(tickformat=".0%", range=[0, 1])
-                st.plotly_chart(fig_tax, width='stretch', key=f"sale_tax_curve_{token}")
+                st.plotly_chart(fig_tax, key=f"sale_tax_curve_{token}")
 
         else:  # "Effective Sell (Net)"
             C = reserve
@@ -1567,7 +1585,7 @@ for token, token_tab in zip(TOKENS, token_tabs):
                     yaxis_title='Avg Net Sell Price (USDC/share)',
                     hovermode="x unified"
                 )
-                st.plotly_chart(fig_eff, width='stretch', key=f"effective_sell_{token}")
+                st.plotly_chart(fig_eff, key=f"effective_sell_{token}")
 
 
 # ===========================================================
@@ -1646,7 +1664,7 @@ else:
             port_df, x="Time", y="PortfolioValue", color="User",
             title=f"Portfolio Value Over Time (Buy Price)"
         )
-        st.plotly_chart(fig_port, width='stretch', key="portfolio_value_chart")
+        st.plotly_chart(fig_port, key="portfolio_value_chart")
 
     with tab2:
         # ---- Points chart ----
@@ -1666,7 +1684,7 @@ else:
                 title="Total Points Over Time (Cumulative Volume + Instant PnL Points)",
                 line_group="User",
             )
-            st.plotly_chart(fig_pts, width='stretch', key='points_chart')
+            st.plotly_chart(fig_pts, key='points_chart')
 
  # ===========================================================
 # Historical portfolio visualization (toggle between buy and sell price)
@@ -1781,14 +1799,14 @@ if not txp.empty:
 
     # ---- UI: let you sort by Payout to verify equal payouts after resolution ----
     metric_choice = st.radio(
-        "Leaderboard metric (sort by):", ["Portfolio Value", "PnL", "Payout"], horizontal=True, key="lb_metric"
+        "Leaderboard metric (sort by):", ["Portfolio Value", "PnL"], horizontal=True, key="lb_metric"
     )
     sort_key = {"Portfolio Value": "PortfolioValue", "PnL": "PnL", "Payout": "Payout"}[metric_choice]
     latest = latest.sort_values(sort_key, ascending=False)
 
     # Optional fairness check after resolution
     if resolved_flag == 1 and not payouts_df.empty and payouts_df["Payout"].nunique() == 1:
-        st.caption("✅ All payouts are equal (same winning shares).")
+        st.caption("✅ Payout is distributed across all winning shares.")
 
     # Top cards + table (add Payout column)
     top_cols = st.columns(min(3, len(latest)))
@@ -1805,8 +1823,7 @@ if not txp.empty:
             st.caption(f"Points: {row['TotalPoints']:,.0f}")
 
     st.dataframe(
-        latest[["User", "Payout", "PortfolioValue", "PnL", "VolumePoints", "PnLPoints", "TotalPoints"]],
-        width='stretch'
+        latest[["User", "Payout", "PortfolioValue", "PnL", "VolumePoints", "PnLPoints", "TotalPoints"]]
     )
 
 else:
