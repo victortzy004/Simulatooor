@@ -503,7 +503,7 @@ def render_curve_viewer():
             x=X * 100.0, 
             y=tax_y, mode='lines', 
             marker=dict(size=10),  
-            name='Sale Tax Rate', 
+            name='Spread Rate', 
             showlegend=True
         ))
         
@@ -589,19 +589,65 @@ def render_simulator():
     input_mode = st.radio("Select Input Mode", ["Quantity", "USDC"], horizontal=True)
     quantity = 0
     usdc_input = 0.0
+
     if input_mode == "Quantity":
         quantity = st.number_input("Enter Quantity", min_value=1, step=1)
     else:
-        usdc_input = st.number_input("Enter USDC Amount", min_value=0.0, step=0.1)
-
+        usdc_str = st.text_input("Enter USDC Amount", key="usdc_input_raw", placeholder="0.00")
+        try:
+            usdc_input = float(usdc_str) if usdc_str.strip() else 0.0
+            if usdc_input < 0:
+                st.warning("USDC must be ≥ 0.")
+                usdc_input = 0.0
+        except ValueError:
+            st.warning("Enter a valid number, e.g. 123.45")
+            usdc_input = 0.0
     st.subheader("Buy/Sell Controls")
+    
 
     cols = st.columns(3)
     for i, token in enumerate(['A', 'B', 'C']):
+
         with cols[i]:
             st.markdown(f"### Outcome {token}")
 
             reserve = st.session_state[f'reserve_{token}']
+            price_now = round(buy_curve(reserve), 2)
+            mcap_now = round(reserve, 2)
+            st.text(f"Current Price: ${price_now}")
+            st.text(f"MCAP: {format_usdc_compact(mcap_now)}")
+            # --- Preview section (live estimate) ---
+            # derive est quantities from current inputs (without executing)
+            if input_mode == "Quantity":
+                est_q_buy = quantity
+                est_q_sell = quantity
+            else:
+                est_q_buy = qty_from_buy_usdc(reserve, usdc_input)
+                est_q_sell = qty_from_sell_usdc(reserve, usdc_input)
+
+            # compute deltas for estimates (clamp to non-negative)
+            est_q_buy = max(0, int(est_q_buy))
+            est_q_sell = max(0, int(est_q_sell))
+
+            # buy estimate
+            if est_q_buy > 0:
+                _, _, est_buy_cost, _, _ = metrics_from_qty(reserve, est_q_buy)
+            else:
+                est_buy_cost = 0.0
+
+            # sell estimate + tax %
+            if est_q_sell > 0:
+                _, _, _, est_sell_proceeds, est_tax_rate = metrics_from_qty(reserve, est_q_sell)
+            else:
+                est_sell_proceeds = 0.0
+                est_tax_rate = 0.0
+
+            st.caption(
+                f"Est. Buy Cost ({est_q_buy}x sh): **{est_buy_cost:,.2f} USDC**  \n"
+                f"Est. Sell Proceeds ({est_q_sell}x sh): **{est_sell_proceeds:,.2f} USDC**  \n"
+                f"Order Tax on Sell: **{est_tax_rate*100:.2f}%**"
+            )
+
             buy_col, sell_col, _, _ = st.columns(4)
 
             with buy_col:
@@ -626,9 +672,9 @@ def render_simulator():
                         "Outcome": token,
                         "Quantity": quantity,
                         "Buy Price": round(buy_price, 4),
-                        "Sell Price": "-",
+                        "Sell Price": None,
                         "BuyAmt_Delta": round(buy_amt_delta, 4),
-                        "SellAmt_Delta": "-",
+                        "SellAmt_Delta": None,
                         "Token Cir. Shares": st.session_state[f'reserve_{token}'],
                         "Token MCAP": st.session_state[f'usdc_reserve_{token}'],
                         "Overall USDC Reserve": round(st.session_state.usdc_reserve, 2),
@@ -643,7 +689,7 @@ def render_simulator():
                         quantity = qty_from_sell_usdc(reserve, usdc_input)
 
                     if reserve >= quantity:
-                        _, sell_price, _, sell_amt_delta = metrics_from_qty(reserve, quantity)
+                        _, sell_price, _, sell_amt_delta, _ = metrics_from_qty(reserve, quantity)
 
                         st.session_state.usdc_reserve -= sell_amt_delta
                         st.session_state[f'usdc_reserve_{token}'] -= sell_amt_delta
@@ -657,15 +703,16 @@ def render_simulator():
                             "Action": "Sell",
                             "Outcome": token,
                             "Quantity": quantity,
-                            "Buy Price": "-",
+                            "Buy Price": None,
                             "Sell Price": round(sell_price, 4),
-                            "BuyAmt_Delta": "-",
+                            "BuyAmt_Delta": None,
                             "SellAmt_Delta": round(sell_amt_delta, 4),
                             "Token Cir. Shares": st.session_state[f'reserve_{token}'],
                             "Token MCAP": st.session_state[f'usdc_reserve_{token}'],
                             "Overall USDC Reserve": round(st.session_state.usdc_reserve, 2),
                             "Payout/Share": payout_share
                         })
+                        st.rerun()
                     else:
                         st.warning(f"Insufficient qty to sell.")
 
@@ -714,13 +761,38 @@ def render_simulator():
                 st.metric(f"Odds {tkn}", f"{odds[tkn]}x" if odds[tkn] != '-' else "-")
 
         st.subheader("Transaction Log")
-        st.dataframe(df, use_container_width=True)
 
+        # Keep df Arrow-friendly
+        numeric_cols = [
+            "Quantity", "Buy Price", "Sell Price",
+            "BuyAmt_Delta", "SellAmt_Delta",
+            "Token Cir. Shares", "Token MCAP",
+            "Overall USDC Reserve", "Payout/Share"
+        ]
+        for c in numeric_cols:
+            if c in df.columns:
+                df[c] = pd.to_numeric(df[c], errors="coerce")
+
+        
+        # (Optional) nice number formats while still using "-" for NaN
+        styler = df.style.format({
+            "Quantity": "{:,.0f}",
+            "Token Cir. Shares": "{:,.0f}",
+            "Buy Price": "{:,.4f}",
+            "Sell Price": "{:,.4f}",
+            "BuyAmt_Delta": "{:,.2f}",
+            "SellAmt_Delta": "{:,.2f}",
+            "Token MCAP": "{:,.2f}",
+            "Overall USDC Reserve": "{:,.2f}",
+            "Payout/Share": "{:,.4f}",
+        }, na_rep="-")
+        st.dataframe(styler, use_container_width=True)
 
         # Trend #1: Payout/Share Historical Visualisation
         st.subheader("📈 Payout/Share Trend")
         df_viz = df[df['Payout/Share'] != '-'].copy()
-        df_viz['Payout/Share'] = pd.to_numeric(df_viz['Payout/Share'], errors='coerce')
+        df_viz["Payout/Share"] = pd.to_numeric(df_viz["Payout/Share"], errors="coerce")
+        df_viz = df_viz.dropna(subset=["Payout/Share"])
         fig = px.line(df_viz, x="Time", y="Payout/Share", color="Outcome", markers=True, title="Payout/Share Over Time")
         st.plotly_chart(fig, use_container_width=True)
         st.divider()
