@@ -16,42 +16,42 @@ from contextlib import closing
 DEFAULT_DECIMAL_PRECISION = 2
 BASE_EPSILON = 1e-4
 MARKET_DURATION_DAYS = 5
-END_TS = "2025-09-19 00:00"
+END_TS = "2025-10-30 00:00"
 DB_PATH = "app.db"
-MAX_SHARES = 5000000 #5M
+MAX_SHARES = 50000000 #5M
 STARTING_BALANCE = 100000.0 #50k
+
+
+
 # --- Per-user starting balances ---
 WEN_STARTING_BALANCE = 5_000_000.0  # exclusive for 'wen'
 
-MARKET_QUESTION = "Will ZXBT agent post an image that has an animal inside by Sept 19?"
-# START_DATE = date(2025, 9, 9)   # change as needed
-# END_DATE   = date(2025, 9, 15)
-# RESOLUTION_NOTE = (
-#     f'This market will resolve to "Yes" if MicroStrategy Incorporated announces that they have acquired '
-#     f'additional Bitcoin between 12:00 AM ET on {START_DATE:%B} {START_DATE.day}, {START_DATE.year} '
-#     f'and 11:59 PM ET on {END_DATE:%B} {END_DATE.day}, {END_DATE.year}. '
-#     f'Otherwise, it will resolve to "No". '
-#     f'Resolution will be based on official information from MicroStrategy or Michael Saylor. '
-# )
-
-AGENT_NAME   = "ZXBT"
-DEADLINE_UTC = datetime(2025, 9, 19, 23, 59, 59, tzinfo=timezone.utc)
+MARKET_QUESTION = "Price of Ethereum by 21st Oct?"
+DEADLINE_UTC = datetime(2025, 10, 21, 23, 59, 59, tzinfo=timezone.utc) # configure
 
 RESOLUTION_NOTE = dedent(f"""
-<p>Resolves to "YES" if the {AGENT_NAME} agent publicly posts an image on X
-(photo, illustration, or AI-generated) that visibly contains a non-human animal
-on or before {DEADLINE_UTC:%Y-%m-%d %H:%M:%S} UTC on any official channel.
-Otherwise, resolves to "NO".</p>
+<p>This market will resolve based on the <strong>closing price</strong> of the
+<strong>ETH/USDT</strong> trading pair on <strong>Binance</strong> at
+<strong>{DEADLINE_UTC:%Y-%m-%d %H:%M:%S}</strong>.</p>
+
+<p>The official value used for resolution will be the <strong>final "Close"</strong>
+price of the 1-minute candle corresponding to 12:00 UTC, as reported on Binance.</p>
 
 <p><strong>Clarifications</strong></p>
 <ul>
-  <li><strong>Publicly posts</strong> = a public post made by the agent's official account(s).</li>
-  <li>Reposts/retweets count only if posted by the agent account itself.</li>
-  <li>Pure text screenshots with no visible animal do not count.</li>
+  <li>If Binance data becomes unavailable, a verified secondary source such as
+  <em>CoinMarketCap</em> or <em>CoinGecko</em> may be used for cross-reference.</li>
+  <li>Price ranges are inclusive of their lower bounds and exclusive of their upper
+  bounds (e.g., 4300 includes 4300.00 but not 4700.00).</li>
+  <li>All values are denominated in USD (USDT pair).</li>
 </ul>
 """).strip()
 
-TOKENS = ["YES", "NO"]
+TOKENS = [
+      "<4300",
+      "4300-4700",
+      ">4700"
+    ]
 
 # Whitelisted usernames and admin reset control
 WHITELIST = {"admin", "rui", "haoye", "leo", "steve", "wen", "sam", "sharmaine", "mariam", "henry", "guard", "victor", "toby", "jesse", "john", "wong"}
@@ -89,27 +89,10 @@ def st_display_market_status(active):
 # Math Helpers (curves)
 def buy_curve(x: float) -> float:
     return (x**(1/3)/1000) + 0.1
-    # return x**(1/4) + x / 400
 
-def sell_curve(x: float) -> float:
-    t = (x - 500000.0) / 1_000_000.0
-    p = 1.0 / (4.0 * (0.8 + math.exp(-t))) - 0.05
-    return max(p,0.0)
-    # return ((x - 500)/40) / ((8 + ((x - 500)/80)**2)**0.5) + (x - 500)/300 + 3.6
 
 def buy_delta(x: float) -> float:
     return (3.0/4000.0) * (x**(4.0/3.0)) + x/10.0
-    # return (640 * x**(5/4) + x**2) / 800
-
-def sell_delta(x: float) -> float:
-    """
-    ∫ y dx = 312500 * ln(1 + 0.8 * e^{(x-500000)/1e6}) - 0.05*x + C, C=0
-    """
-    t = (x - 500000.0) / 1_000_000.0
-    # use log1p for better numerical stability
-    return 312_500.0 * math.log1p(0.8 * math.exp(t)) - 0.05 * x
-    # return 1.93333 * x + 0.00166667 * x**2 + 2 * math.sqrt(301200 - 1000 * x + x**2)
-
 
 # ===== Sale Tax Helpers (new) =====
 def _clamp01(x: float) -> float:
@@ -967,7 +950,7 @@ if market_row:
                     </p>
                     <h5>🔗 Resolution Sources/Resources:</h5>
                     <ul>
-                        <li><a href="https://x.com/zxbt_agent" target="_blank">ZXBT Agent X Handle</a></li>
+                        <li><a href="https://www.binance.com/en/trade/ETH_USDT?_from=markets&type=spot" target="_blank">Binance ETH/USDT Spot Market</a></li>
                     </ul>
                 </div>
                 """,
