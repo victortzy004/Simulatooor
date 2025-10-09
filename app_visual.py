@@ -11,10 +11,10 @@ import numpy as np
 # Constants
 BASE_EPSILON = 1e-4
 OUTCOMES = ['A', 'B', 'C']
-MAX_SHARES = 10000000 # 5M
+MAX_SHARES = 50000000 # 5M
 
 SHARE_DISPLAY_OPTIONS = [500000, 1000000, 2500000, 5000000]
-PRESET_SHARE_QUANTITY_OPTIONS = [100000, 500000,1000000, 2500000, 5000000, 7500000, 1000000]
+PRESET_SHARE_QUANTITY_OPTIONS = [100000, 500000,1000000, 2500000, 5000000, 7500000, 10000000, 25000000, 35000000, 45000000]
 APP_MODES = ["Curve Viewer", "Simulator"]
 
 CURVE_VIEW_MODES = ["Buy Curve", "Sell Spread", "Effective Sell (Net)"]
@@ -211,24 +211,24 @@ def format_usdc_compact(value: float) -> str:
 
 
 CURVE_SETS = {
-    "Flat": {
+    "Default": {
         "buy_curve": flat_buy_curve_np,
         "buy_delta": flat_buy_delta_np,
         "sell_tax_curve": _sale_tax_rate_vec,
         "max_shares": MAX_SHARES
     },
-    "Steep": {
-        "buy_curve": steep_buy_curve_np,
-        "buy_delta": steep_buy_delta_np,
-        "sell_tax_curve": _sale_tax_rate_vec,
-        "max_shares": MAX_SHARES
-    },
-    "Medium": {
-        "buy_curve": medium_buy_curve_np,
-        "buy_delta": medium_buy_delta_np,
-        "sell_tax_curve": _sale_tax_rate_vec,
-        "max_shares": MAX_SHARES
-    },
+    # "Steep": {
+    #     "buy_curve": steep_buy_curve_np,
+    #     "buy_delta": steep_buy_delta_np,
+    #     "sell_tax_curve": _sale_tax_rate_vec,
+    #     "max_shares": MAX_SHARES
+    # },
+    # "Medium": {
+    #     "buy_curve": medium_buy_curve_np,
+    #     "buy_delta": medium_buy_delta_np,
+    #     "sell_tax_curve": _sale_tax_rate_vec,
+    #     "max_shares": MAX_SHARES
+    # },
 }
 
 
