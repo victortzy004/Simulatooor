@@ -790,6 +790,8 @@ def render_simulator():
                         "Overall USDC Reserve": round(st.session_state.usdc_reserve, 2),
                         "Payout/Share": payout_share
                     })
+                     # Immediately re-run so the header stats (price/MCAP) reflect updated reserves
+                    st.rerun()
 
             with sell_col:
                 if st.button(f"Sell {token}"):
