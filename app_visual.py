@@ -11,7 +11,18 @@ import numpy as np
 # Constants
 BASE_EPSILON = 1e-4
 OUTCOMES = ['A', 'B', 'C']
-MAX_SHARES = 50000000 # 5M
+MAX_SHARES = 50000000  # 50M
+
+# Time-scaling constants for redemption spread
+T_KINK_DEFAULT = 0.67       # default point where time-scaling starts to kick in
+T_GROWTH_DEFAULT = 3.0      # default exponent; aggressiveness of late-stage tax growth
+
+# These are the *current* values used in the formula (can be overridden by sliders)
+T_KINK = T_KINK_DEFAULT
+T_GROWTH = T_GROWTH_DEFAULT
+
+# This will be overridden by the Streamlit slider each run
+TIME_PHASE = 0.0    # 0.0 = just opened, 1.0 = at redemption
 
 SHARE_DISPLAY_OPTIONS = [500000, 1000000, 2500000, 5000000]
 PRESET_SHARE_QUANTITY_OPTIONS = [100000, 500000,1000000, 2500000, 5000000, 7500000, 10000000, 25000000, 35000000, 45000000]
@@ -60,22 +71,55 @@ def medium_buy_delta_np(x, C: float = 0.0):
 def _clamp01(x: float) -> float:
     return 0.0 if x < 0.0 else (1.0 if x > 1.0 else x)
 
-def sale_tax_rate(q: int, C: int) -> float:
+def sale_tax_rate(q: int, C: int, p: float | None = None) -> float:
     """
     q: number of shares sold in *this order*
     C: total circulating shares (reserve) before the sale
+    p: market phase in [0, 1] (0 = just started, 1 = at redemption).
+       If None, uses the global TIME_PHASE (set by UI).
 
-    Tax = min(1, (1.15 - 1.3/(1 + e^(4*(q/C) - 2))))
+    Base (size-of-order) component:
+        base = 1.15 - 1.3/(1 + e^(4*(q/C) - 2))
 
-    We clamp to [0,1] to keep it sane even if the scaling makes it big.
+    Then scaled by:
+        s(C): supply-based multiplier
+            1.00  if C < 1,000,000
+            1.25  if 1,000,000 <= C < 10,000,000
+            1.50  if C >= 10,000,000
+
+        t(p): time-based multiplier
+            t(p) = (1 + max(0, p - T_KINK)) ** T_GROWTH
+
+    Final tax is clamped to [0, 1].
     """
     if C <= 0 or q <= 0:
         return 0.0
-    X = _clamp01(float(q) / float(C))  # fraction of supply this order is selling
+
+    # If UI didn't explicitly pass a phase, use the current slider state
+    if p is None:
+        p = TIME_PHASE
+
+    # Clamp inputs
+    X = _clamp01(float(q) / float(C))       # fraction of supply this order is selling
+    p = _clamp01(float(p))                  # market phase 0..1
+
+    # --- Base size-of-order component (unchanged) ---
     base = 1.15 - 1.3 / (1.0 + math.e ** (4.0 * X - 2.0))
-    # scale = C * math.e ** ((C / 100000.0 - 1.0) / 10000.0)
-    # tax = base * scale
-    tax = base
+
+    # --- Supply multiplier s(C) ---
+    if C < 1_000_000:
+        s_mult = 1.0
+    elif C < 10_000_000:
+        s_mult = 1.25
+    else:
+        s_mult = 1.5
+
+    # --- Time multiplier t(p) ---
+    # No effect until phase passes T_KINK, then grows super-linearly
+    excess_phase = max(0.0, p - T_KINK)
+    t_mult = (1.0 + excess_phase) ** T_GROWTH
+
+    tax = base * s_mult * t_mult
     return _clamp01(tax)
 
 def sell_proceeds_net(reserve: int, q: int) -> float:
@@ -279,6 +323,72 @@ with st.sidebar:
     # (Optional) keep this for legacy logic, but it will be derived from qty_mode
     use_preset_for_markers = (qty_mode == "Preset list")
 
+# with st.sidebar:
+#     st.header("Market Phase (Time)")
+#     TIME_PHASE = st.slider(
+#         "Progress toward deadline",
+#         min_value=0.0,
+#         max_value=1.0,
+#         value=0.0,
+#         step=0.01,
+#         help=(
+#             "0.00 = market just opened, 1.00 = at redemption. "
+#             "Controls the time-based multiplier t(p) for the sell spread."
+#         ),
+#     )
+#     st.caption(
+#         f"Current phase p = **{TIME_PHASE:.2f}** → "
+#         f"time multiplier t(p) = (1 + max(0, p - {T_KINK}))^{T_GROWTH}"
+#     )
+with st.sidebar:
+    st.header("Market Phase (Time)")
+    TIME_PHASE = st.slider(
+        "Progress toward deadline",
+        min_value=0.0,
+        max_value=1.0,
+        value=0.0,
+        step=0.01,
+        help=(
+            "0.00 = market just opened, 1.00 = at redemption. "
+            "Controls the time-based multiplier t(p) for the sell spread."
+        ),
+    )
+
+    # --- Advanced controls for the time multiplier t(p) ---
+    with st.expander("Advanced time-scaling (t(p))", expanded=False):
+        t_kink_slider = st.slider(
+            "t_kink (phase threshold)",
+            min_value=0.0,
+            max_value=1.0,
+            value=float(T_KINK_DEFAULT),
+            step=0.01,
+            help="Phase p at which the time-based tax starts growing (> t_kink increases spread).",
+        )
+
+        t_growth_slider = st.slider(
+            "t_growth (growth exponent)",
+            min_value=1.0,
+            max_value=5.0,
+            value=float(T_GROWTH_DEFAULT),
+            step=0.1,
+            help="Exponent controlling how sharply tax increases once p > t_kink.",
+        )
+
+        # Optional reset button back to defaults
+        if st.button("Reset to defaults"):
+            t_kink_slider = T_KINK_DEFAULT
+            t_growth_slider = T_GROWTH_DEFAULT
+
+    # Override the globals used inside sale_tax_rate
+    T_KINK = t_kink_slider
+    T_GROWTH = t_growth_slider
+
+    # Small summary of the current settings
+    st.caption(
+        f"Current phase p = **{TIME_PHASE:.2f}**  \n"
+        f"t_kink = **{T_KINK:.2f}**, t_growth = **{T_GROWTH:.2f}**  \n"
+        f"t(p) = (1 + max(0, p - t_kink))^t_growth"
+    )
 
 
 st.caption(f"Active curve set: **{curve_choice}**")
