@@ -13,6 +13,26 @@ BASE_EPSILON = 1e-4
 OUTCOMES = ['A', 'B', 'C']
 MAX_SHARES = 50000000  # 50M
 
+# Power-law curve shape for Default curve
+C1_DEFAULT = 3.0 / 4.0   # exponent in p(x) = x^c1 / c2
+C2_DEFAULT = 1_000_000.0      # scale in p(x) = x^c1 / c2
+
+C1_VARIANT_1 = 2.0 / 3.0
+C1_VARIANT_2 = 4.0 / 5.0
+
+# Current values used by the formula (overridden by sliders)
+C1 = C1_DEFAULT
+C2 = C2_DEFAULT
+
+C1_PRESETS = {
+    "Default (C1 = 0.75)": 0.75,
+    "(C1 = 2/3)": 2.0 / 3.0,
+    "(C1 = 0.8)": 0.8,
+}
+
+# Current active exponent; will be updated from curve_choice
+C1 = C1_PRESETS["Default (C1 = 0.75)"]
+
 # Time-scaling constants for redemption spread
 T_KINK_DEFAULT = 0.67       # default point where time-scaling starts to kick in
 T_GROWTH_DEFAULT = 3.0      # default exponent; aggressiveness of late-stage tax growth
@@ -33,19 +53,48 @@ CURVE_VIEW_MODES = ["Buy Curve", "Sell Spread", "Effective Sell (Net)"]
 # ===========================================================
 # NumPy (vectorized) versions
 
-def _cbrt(x):
-    # vectorized real cube root
-    x = np.asarray(x, dtype=float)
-    return np.cbrt(x)
+# def _cbrt(x):
+#     # vectorized real cube root
+#     x = np.asarray(x, dtype=float)
+#     return np.cbrt(x)
 
-# ---- FLAT MODE ----
+# # ---- FLAT MODE ----
+# def flat_buy_curve_np(x):
+#     return _cbrt(x) / 1000.0 + 0.1
+
+# def flat_buy_delta_np(x, C: float = 0.0):
+#     x = np.asarray(x, dtype=float)
+#     return (3.0/4000.0) * (np.abs(x) ** (4.0/3.0)) + 0.1 * x + C
+
+# ---- FLAT MODE (power-law parametric) ----
 def flat_buy_curve_np(x):
-    return _cbrt(x) / 1000.0 + 0.1
+    """
+    p(x) = x^c1 / c2
+    Uses global C1, C2 (set via sidebar sliders).
+    """
+    x = np.asarray(x, dtype=float)
+    x = np.maximum(0.0, x)
+    return np.power(x, C1) / max(C2, 1e-9)
+
 
 def flat_buy_delta_np(x, C: float = 0.0):
-    x = np.asarray(x, dtype=float)
-    return (3.0/4000.0) * (np.abs(x) ** (4.0/3.0)) + 0.1 * x + C
+    """
+    Integral of p(x):
 
+        ∫ p(x) dx = x^(c1+1) / ((c1+1) * c2)
+
+    We keep the +C integration constant for compatibility, but
+    in practice you always take differences buy_delta(b) - buy_delta(a),
+    so C cancels out.
+    """
+    x = np.asarray(x, dtype=float)
+    x = np.maximum(0.0, x)
+
+    denom = (C1 + 1.0) * C2
+    if abs(denom) < 1e-12:
+        denom = 1e-9  # safety
+
+    return np.power(x, C1 + 1.0) / denom + C
 
 # ---- STEEP MODE ----
 def steep_buy_curve_np(x):
@@ -255,24 +304,24 @@ def format_usdc_compact(value: float) -> str:
 
 
 CURVE_SETS = {
-    "Default": {
+    "Default (C1 = 0.75)": {
         "buy_curve": flat_buy_curve_np,
         "buy_delta": flat_buy_delta_np,
         "sell_tax_curve": _sale_tax_rate_vec,
         "max_shares": MAX_SHARES
     },
-    # "Steep": {
-    #     "buy_curve": steep_buy_curve_np,
-    #     "buy_delta": steep_buy_delta_np,
-    #     "sell_tax_curve": _sale_tax_rate_vec,
-    #     "max_shares": MAX_SHARES
-    # },
-    # "Medium": {
-    #     "buy_curve": medium_buy_curve_np,
-    #     "buy_delta": medium_buy_delta_np,
-    #     "sell_tax_curve": _sale_tax_rate_vec,
-    #     "max_shares": MAX_SHARES
-    # },
+    "(C1 = 2/3)": {
+        "buy_curve": flat_buy_curve_np,
+        "buy_delta": flat_buy_delta_np,
+        "sell_tax_curve": _sale_tax_rate_vec,
+        "max_shares": MAX_SHARES
+    },
+    "(C1 = 0.8)": {
+        "buy_curve": flat_buy_curve_np,
+        "buy_delta": flat_buy_delta_np,
+        "sell_tax_curve": _sale_tax_rate_vec,
+        "max_shares": MAX_SHARES
+    },
 }
 
 
@@ -289,7 +338,17 @@ with st.sidebar:
     st.header("Curve Settings")
     curve_choice = st.selectbox("Curve set", list(CURVE_SETS.keys()), index=0)
 
+    st.caption(f"Active curve set: **{curve_choice}**")
+    # Update exponent C1 based on selected curve set
+    C1 = C1_PRESETS.get(curve_choice, C1_PRESETS["Default (C1 = 0.75)"])
 
+    # Bind active curve functions for the rest of the app
+    _active = CURVE_SETS[curve_choice]
+    buy_curve     = _active["buy_curve"]
+    sell_tax_curve    = _active["sell_tax_curve"]
+    buy_delta     = _active["buy_delta"]
+    MAX_SHARES    = _active.get("max_shares", MAX_SHARES)
+    
     st.subheader("Marker quantity")
     qty_mode = st.radio(
         "Marker source",
@@ -682,7 +741,7 @@ def render_curve_viewer():
 
     m1, m2, m3 = st.columns(3)
     m1.metric("Current Quantity", f"{q:,}", border=True)
-    m2.metric("Buy price", f"{pb:.2f}", border=True)
+    m2.metric("Buy price", f"{pb:.3f}", border=True)
     m3.metric("Theoretical MCAP (∫ buy 0→q)", f"{format_usdc_compact(mcap_0_to_q)}", border=True)
 
     if qty_mode == "Preset list":
