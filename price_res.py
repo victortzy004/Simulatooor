@@ -9,7 +9,7 @@ import streamlit as st
 import pandas as pd
 
 
-BINANCE_KLINES_URL = "https://api.binance.com/api/v3/klines"
+BINANCE_KLINES_URL = "https://data-api.binance.vision/api/v3/klines"
 
 
 @dataclass(frozen=True)
