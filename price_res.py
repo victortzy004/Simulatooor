@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional, Sequence
 
 import requests
@@ -202,7 +202,12 @@ def main() -> None:
     default_symbols = "BTCUSDT, ETHUSDT, SOLUSDT, BNBUSDT"
     symbols_str = st.text_input("Symbols (comma-separated)", value=default_symbols)
 
-    default_dt = "2025-12-22 23:59:00"
+    
+    # Yesterday at 23:59 UTC
+    default_dt = (
+        datetime.now(timezone.utc)
+        - timedelta(days=1)
+    ).replace(hour=23, minute=59, second=0, microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
     dt_str = st.text_input("Market end datetime (UTC)", value=default_dt, help="e.g. 2025-12-22 23:59:00")
 
     if st.button("Fetch resolution evidence"):
