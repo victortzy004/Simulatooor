@@ -11,11 +11,11 @@ import numpy as np
 # Constants
 BASE_EPSILON = 1e-4
 OUTCOMES = ['A', 'B', 'C']
-MAX_SHARES = 50000000  # 50M
+MAX_SHARES = 100000000  # 50M
 
 # Power-law curve shape for Default curve
 C1_DEFAULT = 3.0 / 4.0   # exponent in p(x) = x^c1 / c2
-C2_DEFAULT = 1_000_000.0      # scale in p(x) = x^c1 / c2
+C2_DEFAULT = 2_000_000.0      # scale in p(x) = x^c1 / c2
 
 C1_VARIANT_1 = 2.0 / 3.0
 C1_VARIANT_2 = 4.0 / 5.0
@@ -34,8 +34,8 @@ C1_PRESETS = {
 C1 = C1_PRESETS["Default (C1 = 0.75)"]
 
 # Time-scaling constants for redemption spread
-T_KINK_DEFAULT = 0.67       # default point where time-scaling starts to kick in
-T_GROWTH_DEFAULT = 3.0      # default exponent; aggressiveness of late-stage tax growth
+T_KINK_DEFAULT = 0.5       # default point where time-scaling starts to kick in
+T_GROWTH_DEFAULT = 5.0      # default exponent; aggressiveness of late-stage tax growth
 
 # These are the *current* values used in the formula (can be overridden by sliders)
 T_KINK = T_KINK_DEFAULT
